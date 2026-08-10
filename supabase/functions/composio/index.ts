@@ -37,9 +37,9 @@ function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 }
 
-// Resolves the real brokerage_id for whoever is calling, from their auth
+// Resolves the real firm_id for whoever is calling, from their auth
 // token — never from anything the client claims in the request body.
-async function resolveBrokerageId(authHeader: string): Promise<string> {
+async function resolveFirmId(authHeader: string): Promise<string> {
   const token = authHeader.replace('Bearer ', '');
   const userRes = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
     headers: { Authorization: `Bearer ${token}`, apikey: SERVICE_ROLE_KEY! },
@@ -49,12 +49,12 @@ async function resolveBrokerageId(authHeader: string): Promise<string> {
   if (!user?.id) throw new Error('Unauthenticated');
 
   const profileRes = await fetch(
-    `${SUPABASE_URL}/rest/v1/profiles?id=eq.${user.id}&select=brokerage_id`,
+    `${SUPABASE_URL}/rest/v1/profiles?id=eq.${user.id}&select=firm_id`,
     { headers: { Authorization: `Bearer ${SERVICE_ROLE_KEY}`, apikey: SERVICE_ROLE_KEY! } }
   );
   const profiles = await profileRes.json();
-  if (!profiles?.[0]?.brokerage_id) throw new Error('No profile found for this user');
-  return profiles[0].brokerage_id;
+  if (!profiles?.[0]?.firm_id) throw new Error('No profile found for this user');
+  return profiles[0].firm_id;
 }
 
 // Reuses a cached auth_config_id for a toolkit if one already exists;
@@ -99,8 +99,8 @@ Deno.serve(async (req: Request) => {
     if (!COMPOSIO_API_KEY) throw new Error('COMPOSIO_API_KEY not configured');
 
     const authHeader = req.headers.get('Authorization') || '';
-    const brokerageId = await resolveBrokerageId(authHeader);
-    const composioUserId = `realty-${brokerageId}`;
+    const firmId = await resolveFirmId(authHeader);
+    const composioUserId = `law-${firmId}`;
 
     const { action, toolkit_slug, connected_account_id, query } = await req.json();
 
