@@ -12,44 +12,53 @@ interface SpecialistAgent {
   icon: any;
   description: string;
   match: string;
+  access: string;
   relevantIf: (hourlyCount: number, activeCount: number, criticalCount: number) => boolean;
 }
+
+const DEPLOYMENT_PATH = "This isn't built as a live agent yet. Requesting it creates a real, tracked request for review — nothing activates automatically, and it never gets access to your workspace until it's actually built and you approve it.";
 
 const SPECIALISTS: SpecialistAgent[] = [
   {
     key: 'legal_research', name: 'Legal Research Agent', category: 'research', icon: FileSearch,
     description: 'Pulls relevant case law, statutes, and precedent for a specific matter on request.',
     match: 'Every matter benefits from case-law support — always a reasonable next hire.',
+    access: 'Case law and statute search only — no client or matter data leaves your workspace.',
     relevantIf: () => true,
   },
   {
     key: 'client_intake', name: 'Client Intake Agent', category: 'intake', icon: UserCheck,
     description: 'Structured intake questionnaire and initial fact-gathering before a consultation.',
     match: 'Matches firms with a dedicated Reception role or high intake volume.',
+    access: 'New party/lead records created during intake — nothing from existing matters.',
     relevantIf: () => true,
   },
   {
     key: 'billing_time_entry', name: 'Billing & Time Entry Agent', category: 'billing', icon: ClockIcon,
     description: 'Drafts time entry descriptions from raw notes and flags unbilled work nearing month-end.',
     match: 'Matches this firm: hourly-billed matters need consistent time entries.',
+    access: 'Matter billing type and time entries only — no trust account or invoice data.',
     relevantIf: (hourlyCount) => hourlyCount > 0,
   },
   {
     key: 'discovery_assistant', name: 'Discovery Assistant', category: 'research', icon: Search,
     description: 'Organizes and summarizes discovery documents for a matter.',
     match: 'Matches this firm: caseload is large enough that manual review is starting to slow things down.',
+    access: 'Only documents explicitly shared with it for one specific matter at a time.',
     relevantIf: (_, activeCount) => activeCount > 3,
   },
   {
     key: 'contract_review', name: 'Contract Review Agent', category: 'research', icon: FileText,
     description: 'Flags unusual clauses and deviations from standard templates in a draft contract.',
     match: 'Matches corporate/transactional practice areas.',
+    access: 'The specific document you upload for review — nothing else in your workspace.',
     relevantIf: () => true,
   },
   {
     key: 'deadline_compliance', name: 'Deadline Compliance Agent', category: 'compliance', icon: ShieldAlert,
     description: 'Cross-checks every open matter against jurisdiction-specific filing rules and flags at-risk deadlines.',
     match: 'Matches this firm: critical, statute-of-limitations-sensitive deadlines are on file right now.',
+    access: 'Matter deadlines and applicable jurisdiction rules only.',
     relevantIf: (_, __, criticalCount) => criticalCount > 0,
   },
 ];
@@ -93,8 +102,10 @@ function BestNextPickCard({ agent, onRequest }: { agent: SpecialistAgent; onRequ
 }
 
 function SpecialistCard({ agent, isRequested, isRecommended, onRequest }: { agent: SpecialistAgent; isRequested: boolean; isRecommended: boolean; onRequest: () => void }) {
+  const [expanded, setExpanded] = useState(false);
+
   return (
-    <div className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg p-4">
+    <div className={`bg-[var(--bg-secondary)] border rounded-lg p-4 transition-colors ${expanded ? 'border-[var(--accent-secondary)]' : 'border-[var(--border-subtle)]'}`}>
       <div className="flex items-start justify-between mb-2">
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-lg bg-[var(--bg-tertiary)] flex items-center justify-center shrink-0">
@@ -113,15 +124,36 @@ function SpecialistCard({ agent, isRequested, isRecommended, onRequest }: { agen
       </div>
       <p className="text-xs text-[var(--text-secondary)] mb-2">{agent.description}</p>
       <p className="text-xs text-[var(--text-tertiary)] italic mb-3">{agent.match}</p>
-      {isRequested ? (
-        <div className="flex items-center gap-1.5 text-xs text-[var(--text-tertiary)] h-8">
-          <Clock className="w-3.5 h-3.5" /> Requested — pending review
+
+      {expanded && (
+        <div className="mb-3 space-y-2">
+          <div className="bg-[var(--bg-tertiary)] rounded-md p-3">
+            <div className="text-[10px] uppercase tracking-wider text-[var(--text-tertiary)] mb-1">Deployment Path</div>
+            <p className="text-xs text-[var(--text-secondary)]">{DEPLOYMENT_PATH}</p>
+          </div>
+          <p className="text-xs text-[var(--text-tertiary)]">
+            <span className="text-[var(--text-secondary)] font-medium">Access:</span> {agent.access}
+          </p>
         </div>
-      ) : (
-        <button onClick={onRequest} className="w-full h-8 text-xs font-medium bg-[var(--text-primary)] text-[var(--bg-primary)] rounded hover:opacity-90 transition-opacity">
-          Request agent
-        </button>
       )}
+
+      <div className="flex gap-2">
+        {isRequested ? (
+          <div className="flex-1 flex items-center gap-1.5 text-xs text-[var(--text-tertiary)] h-8">
+            <Clock className="w-3.5 h-3.5" /> Requested — pending review
+          </div>
+        ) : (
+          <button onClick={onRequest} className="flex-1 h-8 text-xs font-medium bg-[var(--text-primary)] text-[var(--bg-primary)] rounded hover:opacity-90 transition-opacity">
+            Request agent
+          </button>
+        )}
+        <button
+          onClick={() => setExpanded(v => !v)}
+          className="h-8 px-3 text-xs font-medium border border-[var(--border-subtle)] rounded hover:bg-[var(--bg-tertiary)] transition-colors whitespace-nowrap"
+        >
+          {expanded ? 'Hide details' : 'View details'}
+        </button>
+      </div>
     </div>
   );
 }
