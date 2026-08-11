@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useStore } from '../../lib/store';
 import { callGemini, streamGeminiContent } from '../../lib/gemini';
 import { strategicChatPrompt, strategicInsightsPrompt } from '../../lib/prompts';
@@ -18,11 +19,25 @@ export function StrategicScreen() {
   const [streamingContent, setStreamingContent] = useState('');
   const [dismissedInsights, setDismissedInsights] = useState<Set<string>>(new Set());
   const [regenerating, setRegenerating] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
 
-  const handleSend = async () => {
-    if (!inputValue.trim() || isTyping) return;
+  // Arriving from the Command Center's "ask" banner with a real question
+  // pre-filled — auto-send it once, then clear the param so a page
+  // refresh doesn't keep re-asking the same thing.
+  useEffect(() => {
+    const q = searchParams.get('q');
+    if (q) {
+      handleSend(q);
+      setSearchParams({}, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-    const userMsg = inputValue;
+  const handleSend = async (overrideText?: string) => {
+    const textToSend = overrideText ?? inputValue;
+    if (!textToSend.trim() || isTyping) return;
+
+    const userMsg = textToSend;
     setInputValue('');
     setChatHistory(prev => [...prev, { role: 'user', content: userMsg }]);
     setIsTyping(true);
