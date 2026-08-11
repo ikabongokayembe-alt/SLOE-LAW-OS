@@ -1,56 +1,69 @@
 // Supabase Edge Function: welcome-email
-// Fires a welcome email via Resend the moment someone joins a brokerage
-// workspace — either as the founding Principal (on signup) or as an
-// invited team member (on accept-invite). Same pattern as the Sloe AI
-// Network welcome email pipeline (RESEND_API_KEY secret, Resend API).
-// Fire-and-forget from the frontend: a failure here should never block
-// someone from actually using their new account.
+// Fires a welcome email via Resend the moment someone joins a firm
+// workspace — either as the founding Partner (on signup) or as an
+// invited team member (on accept-invite). Fire-and-forget from the
+// frontend: a failure here should never block someone from actually
+// using their new account.
 //
 // Deploy:  supabase functions deploy welcome-email
 // Secret:  supabase secrets set RESEND_API_KEY=...
-//          supabase secrets set RESEND_FROM="Realty OS <realty@sloelabs.com>"
-//          (RESEND_FROM must be a domain verified in your Resend account —
-//          reuse whatever domain Sloe AI Network's welcome pipeline uses if
-//          that's already verified, rather than a fresh one.)
+//          supabase secrets set RESEND_FROM="Law OS <law@sloelabs.com>"
 
 // @ts-ignore Deno global is available in the Supabase Edge Function runtime
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY');
 // @ts-ignore Deno global is available in the Supabase Edge Function runtime
-const RESEND_FROM = Deno.env.get('RESEND_FROM') ?? 'Realty OS <onboarding@resend.dev>';
+const RESEND_FROM = Deno.env.get('RESEND_FROM') ?? 'Law OS <onboarding@resend.dev>';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-function principalEmailHtml(name: string, brokerageName: string): string {
+function emailShell(bodyHtml: string): string {
   return `
-    <div style="font-family: -apple-system, sans-serif; max-width: 480px; margin: 0 auto; color: #0a0a0a;">
-      <h1 style="font-size: 20px; font-weight: 600;">Welcome to Realty OS, ${name}.</h1>
-      <p style="font-size: 14px; line-height: 1.6; color: #444;">
-        ${brokerageName}'s workspace is live. You're set up as Principal, which
-        means you can see your whole team's pipeline, manage listings and
-        campaigns, and invite your agents whenever you're ready.
-      </p>
-      <p style="font-size: 14px; line-height: 1.6; color: #444;">
-        Head to the Team screen to invite your first agent — everything else
-        is ready to go.
-      </p>
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f4f4f5; padding: 32px 16px;">
+      <div style="max-width: 480px; margin: 0 auto; background: #0a0a0a; border-radius: 12px; overflow: hidden;">
+        <div style="padding: 24px 28px; border-bottom: 1px solid rgba(255,255,255,0.08);">
+          <span style="font-size: 13px; font-weight: 600; letter-spacing: 0.05em; color: #d4af37; text-transform: uppercase;">LAW OS</span>
+        </div>
+        <div style="padding: 28px;">
+          ${bodyHtml}
+        </div>
+        <div style="padding: 20px 28px; border-top: 1px solid rgba(255,255,255,0.08);">
+          <a href="https://law.sloelabs.com" style="display: inline-block; background: #f5f5f5; color: #0a0a0a; font-size: 13px; font-weight: 600; padding: 10px 18px; border-radius: 6px; text-decoration: none;">
+            Open your workspace →
+          </a>
+        </div>
+      </div>
+      <p style="text-align: center; font-size: 11px; color: #a1a1aa; margin-top: 16px;">Law OS by Sloe Labs</p>
     </div>
   `;
 }
 
-function memberEmailHtml(name: string, brokerageName: string, roleLabel: string): string {
-  return `
-    <div style="font-family: -apple-system, sans-serif; max-width: 480px; margin: 0 auto; color: #0a0a0a;">
-      <h1 style="font-size: 20px; font-weight: 600;">You're in, ${name}.</h1>
-      <p style="font-size: 14px; line-height: 1.6; color: #444;">
-        You've joined ${brokerageName}'s Realty OS workspace as ${roleLabel}.
-        Your access is scoped to what's relevant to your role — log in
-        whenever you're ready to get started.
-      </p>
-    </div>
-  `;
+function partnerEmailHtml(name: string, firmName: string): string {
+  return emailShell(`
+    <h1 style="font-size: 19px; font-weight: 600; color: #f5f5f5; margin: 0 0 12px;">Welcome to Law OS, ${name}.</h1>
+    <p style="font-size: 14px; line-height: 1.6; color: #d4d4d8; margin: 0 0 12px;">
+      ${firmName}'s workspace is live. You're set up as Partner, which
+      means you can see your whole firm's caseload, run conflict checks,
+      track deadlines, and invite your team whenever you're ready.
+    </p>
+    <p style="font-size: 14px; line-height: 1.6; color: #d4d4d8; margin: 0;">
+      Head to the Team screen to invite your first Associate — everything
+      else is ready to go.
+    </p>
+  `);
+}
+
+function memberEmailHtml(name: string, firmName: string, roleLabel: string): string {
+  return emailShell(`
+    <h1 style="font-size: 19px; font-weight: 600; color: #f5f5f5; margin: 0 0 12px;">You're in, ${name}.</h1>
+    <p style="font-size: 14px; line-height: 1.6; color: #d4d4d8; margin: 0;">
+      You've joined ${firmName}'s Law OS workspace as ${roleLabel}.
+      Your access is scoped to what's relevant to your role — log in
+      whenever you're ready to get started.
+    </p>
+  `);
 }
 
 // @ts-ignore Deno.serve is available in the Supabase Edge Function runtime
@@ -62,26 +75,26 @@ Deno.serve(async (req: Request) => {
   try {
     if (!RESEND_API_KEY) throw new Error('RESEND_API_KEY not configured');
 
-    const { email, name, brokerageName, role } = await req.json();
-    if (!email || !name || !brokerageName) {
-      return new Response(JSON.stringify({ error: 'email, name, and brokerageName are required' }), {
+    const { email, name, brokerageName: firmName, role } = await req.json();
+    if (!email || !name || !firmName) {
+      return new Response(JSON.stringify({ error: 'email, name, and brokerageName (firm name) are required' }), {
         status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
-    const isPrincipal = role === 'principal';
+    const isPartner = role === 'principal';
     const roleLabels: Record<string, string> = {
-      agent: 'an Agent', manager: 'a Manager', listings_coordinator: 'a Listings Coordinator',
-      campaign_coordinator: 'a Campaign Coordinator', reception: 'Reception',
+      agent: 'an Associate', manager: 'a Practice Manager', paralegal: 'a Paralegal',
+      billing: 'Billing', reception: 'Reception',
     };
 
-    const subject = isPrincipal
-      ? `${brokerageName}'s Realty OS workspace is ready`
-      : `You've joined ${brokerageName} on Realty OS`;
-    const html = isPrincipal
-      ? principalEmailHtml(name, brokerageName)
-      : memberEmailHtml(name, brokerageName, roleLabels[role] ?? 'a team member');
+    const subject = isPartner
+      ? `${firmName}'s Law OS workspace is ready`
+      : `You've joined ${firmName} on Law OS`;
+    const html = isPartner
+      ? partnerEmailHtml(name, firmName)
+      : memberEmailHtml(name, firmName, roleLabels[role] ?? 'a team member');
 
     const res = await fetch('https://api.resend.com/emails', {
       method: 'POST',
