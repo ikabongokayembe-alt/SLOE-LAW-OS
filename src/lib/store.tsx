@@ -3,7 +3,7 @@ import { supabase, isSupabaseConfigured, DEMO_TENANT_ID } from './supabase';
 import { useAuth } from './auth';
 import { useToast } from './toast';
 import { attorneys as mockAttorneys } from '../data/attorneys';
-import { Attorney, PracticeArea, MatterStage, Party, ConflictCheck, Matter, Deadline, Insight } from '../types';
+import { Attorney, PracticeArea, MatterStage, Party, ConflictCheck, Matter, Deadline, Insight, LawDocument } from '../types';
 
 interface StoreState {
   loading: boolean;
@@ -17,6 +17,7 @@ interface StoreState {
   matters: Matter[];
   deadlines: Deadline[];
   insights: Insight[];
+  documents: LawDocument[];
   agentRequests: { agent_key: string; status: string }[];
 }
 
@@ -31,6 +32,8 @@ interface StoreActions {
   addDeadline: (deadline: Omit<Deadline, 'id'>) => Promise<void>;
   updateDeadline: (id: string, patch: Partial<Deadline>) => Promise<void>;
   addInsights: (insights: Omit<Insight, 'id'>[]) => Promise<void>;
+  uploadDocument: (file: File, matterId: string | null) => Promise<{ error?: string }>;
+  deleteDocument: (id: string, storagePath: string) => Promise<void>;
   requestAgent: (agentKey: string) => Promise<void>;
 }
 
@@ -61,12 +64,13 @@ function loadMockData(): Omit<StoreState, 'loading' | 'error' | 'hasLoadedOnce'>
     matters: [],
     deadlines: [],
     insights: [],
+    documents: [],
     agentRequests: [],
   };
 }
 
 async function loadAll(firmId: string): Promise<Omit<StoreState, 'loading' | 'error' | 'hasLoadedOnce'>> {
-  const [attorneysR, practiceAreasR, matterStagesR, partiesR, conflictChecksR, mattersR, deadlinesR, insightsR, agentRequestsR] = await Promise.all([
+  const [attorneysR, practiceAreasR, matterStagesR, partiesR, conflictChecksR, mattersR, deadlinesR, insightsR, documentsR, agentRequestsR] = await Promise.all([
     supabase.from('attorneys').select('*').eq('firm_id', firmId).order('name'),
     supabase.from('practice_areas').select('*').eq('firm_id', firmId),
     supabase.from('matter_stages').select('*').eq('firm_id', firmId).order('sort_order'),
@@ -75,6 +79,7 @@ async function loadAll(firmId: string): Promise<Omit<StoreState, 'loading' | 'er
     supabase.from('matters').select('*').eq('firm_id', firmId).order('opened_date', { ascending: false }),
     supabase.from('deadlines').select('*').eq('firm_id', firmId).order('due_date'),
     supabase.from('insights').select('*').eq('firm_id', firmId).is('dismissed_at', null).order('generated_at', { ascending: false }),
+    supabase.from('documents').select('*').eq('firm_id', firmId).order('created_at', { ascending: false }),
     supabase.from('agent_requests').select('agent_key,status').eq('tenant_id', firmId),
   ]);
 
@@ -86,6 +91,7 @@ async function loadAll(firmId: string): Promise<Omit<StoreState, 'loading' | 'er
   const matters = assertNoError<any[]>(mattersR, 'matters');
   const deadlines = assertNoError<any[]>(deadlinesR, 'deadlines');
   const insightsRaw = insightsR.error ? [] : (insightsR.data ?? []); // insights table optional — degrade gracefully if not yet migrated
+  const documentsRaw = documentsR.error ? [] : (documentsR.data ?? []); // same graceful degrade until migration 0005 is applied
   const agentRequests = agentRequestsR.error ? [] : (agentRequestsR.data ?? []);
 
   return {
@@ -97,6 +103,7 @@ async function loadAll(firmId: string): Promise<Omit<StoreState, 'loading' | 'er
     matters: matters as Matter[],
     deadlines: deadlines as Deadline[],
     insights: insightsRaw as Insight[],
+    documents: documentsRaw as LawDocument[],
     agentRequests: agentRequests.map((r: any) => ({ agent_key: r.agent_key, status: r.status })),
   };
 }
@@ -108,7 +115,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const [state, setState] = useState<StoreState>({
     loading: true, error: null, hasLoadedOnce: false,
-    attorneys: [], practiceAreas: [], matterStages: [], parties: [], conflictChecks: [], matters: [], deadlines: [], insights: [], agentRequests: [],
+    attorneys: [], practiceAreas: [], matterStages: [], parties: [], conflictChecks: [], matters: [], deadlines: [], insights: [], documents: [], agentRequests: [],
   });
 
   const mattersRef = useRef(state.matters);
@@ -249,6 +256,52 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setState(s => ({ ...s, insights: [...(data as any[]), ...s.insights] }));
   }, [firmId]);
 
+  // Real Supabase Storage upload, scoped by firm/matter in the path
+  // itself (matches the storage RLS policy documented in migration
+  // 0005 — every operation is checked against that leading path
+  // segment matching the caller's own firm_id).
+  const uploadDocument = useCallback(async (file: File, matterId: string | null) => {
+    if (!isSupabaseConfigured) {
+      const newDoc: LawDocument = {
+        id: `local-doc-${Date.now()}`, matter_id: matterId, file_name: file.name,
+        storage_path: `local/${file.name}`, file_type: file.type, file_size: file.size,
+        created_at: new Date().toISOString(),
+      };
+      setState(s => ({ ...s, documents: [newDoc, ...s.documents] }));
+      showToast('success', 'Document added (preview mode — nothing persists here).');
+      return {};
+    }
+    const path = `${firmId}/${matterId ?? 'unfiled'}/${Date.now()}-${file.name}`;
+    const { error: uploadError } = await supabase.storage.from('matter-documents').upload(path, file);
+    if (uploadError) {
+      showToast('error', "Couldn't upload that file — try again.");
+      return { error: uploadError.message };
+    }
+    const { data, error } = await supabase.from('documents').insert({
+      firm_id: firmId, matter_id: matterId, file_name: file.name, storage_path: path,
+      file_type: file.type, file_size: file.size,
+    }).select().single();
+    if (error || !data) {
+      // Clean up the orphaned storage object if the metadata row failed
+      await supabase.storage.from('matter-documents').remove([path]);
+      showToast('error', "Couldn't save that document — try again.");
+      return { error: error?.message };
+    }
+    setState(s => ({ ...s, documents: [data as LawDocument, ...s.documents] }));
+    showToast('success', 'Document uploaded.');
+    return {};
+  }, [firmId]);
+
+  const deleteDocument = useCallback(async (id: string, storagePath: string) => {
+    setState(s => ({ ...s, documents: s.documents.filter(d => d.id !== id) }));
+    if (!isSupabaseConfigured) return;
+    const { error: dbError } = await supabase.from('documents').delete().eq('id', id);
+    if (dbError) { console.error('[store] deleteDocument failed:', dbError); showToast('error', "Couldn't delete — try again."); return; }
+    const { error: storageError } = await supabase.storage.from('matter-documents').remove([storagePath]);
+    if (storageError) console.error('[store] orphaned storage object (db row deleted, file remains):', storageError);
+    showToast('success', 'Document deleted.');
+  }, []);
+
   const requestAgent = useCallback(async (agentKey: string) => {    if (!isSupabaseConfigured) {
       setState(s => ({ ...s, agentRequests: [...s.agentRequests, { agent_key: agentKey, status: 'pending' }] }));
       showToast('success', 'Request noted (preview mode — nothing persists here).');
@@ -289,7 +342,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   return (
     <StoreContext.Provider value={{
       ...state,
-      refresh, addParty, runConflictCheck, clearConflictCheck, addMatter, updateMatterStage, updateMatterAttorney, addDeadline, updateDeadline, addInsights, requestAgent,
+      refresh, addParty, runConflictCheck, clearConflictCheck, addMatter, updateMatterStage, updateMatterAttorney, addDeadline, updateDeadline, addInsights, uploadDocument, deleteDocument, requestAgent,
     }}>
       {children}
     </StoreContext.Provider>

@@ -90,3 +90,14 @@ export interface Insight {
   suggested_actions?: { label: string; action_type: string }[];
   scope?: string;
 }
+
+export interface LawDocument {
+  id: string;
+  matter_id: string | null;
+  file_name: string;
+  storage_path: string;
+  file_type?: string;
+  file_size?: number;
+  uploaded_by?: string;
+  created_at: string;
+}

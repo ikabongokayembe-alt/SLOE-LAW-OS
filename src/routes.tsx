@@ -4,6 +4,7 @@ import { DashboardScreen } from './components/dashboard/DashboardScreen';
 import { MattersScreen } from './components/matters/MattersScreen';
 import { DeadlinesScreen } from './components/deadlines/DeadlinesScreen';
 import { PartiesScreen } from './components/parties/PartiesScreen';
+import { DocumentsScreen } from './components/documents/DocumentsScreen';
 import { StrategicScreen } from './components/strategic/StrategicScreen';
 import { OperatorScreen } from './components/operator/OperatorScreen';
 import { AgentLibraryScreen } from './components/agents/AgentLibraryScreen';
@@ -29,6 +30,7 @@ export const router = createBrowserRouter([
           { path: 'matters', element: <MattersScreen /> },
           { path: 'deadlines', element: <DeadlinesScreen /> },
           { path: 'parties', element: <PartiesScreen /> },
+          { path: 'documents', element: <DocumentsScreen /> },
           { path: 'analyst', element: <StrategicScreen /> },
           { path: 'operator', element: <OperatorScreen /> },
           { path: 'agents', element: <AgentLibraryScreen /> },

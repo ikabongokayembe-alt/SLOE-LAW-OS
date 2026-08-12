@@ -1,5 +1,5 @@
 import { NavLink, useNavigate, useLocation } from 'react-router-dom';
-import { Home, Briefcase, Clock, Users, ChevronDown, ChevronRight, UsersRound, LogOut, Wrench, Sparkles, Plug, Search } from 'lucide-react';
+import { Home, Briefcase, Clock, Users, ChevronDown, ChevronRight, UsersRound, LogOut, Wrench, Sparkles, Plug, Search, FileText } from 'lucide-react';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { useState } from 'react';
@@ -67,6 +67,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
               <NavLink to="/matters" className={navItemClass} onClick={onNavigate}><Briefcase className={iconClass} /><span>Matters</span></NavLink>
               <NavLink to="/deadlines" className={navItemClass} onClick={onNavigate}><Clock className={iconClass} /><span>Deadlines</span></NavLink>
               <NavLink to="/parties" className={navItemClass} onClick={onNavigate}><Search className={iconClass} /><span>Conflict Check</span></NavLink>
+              <NavLink to="/documents" className={navItemClass} onClick={onNavigate}><FileText className={iconClass} /><span>Documents</span></NavLink>
             </div>
           )}
         </div>
