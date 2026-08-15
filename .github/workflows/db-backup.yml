@@ -1,0 +1,255 @@
+name: Database backup to R2
+
+# Stopgap, not a replacement for a real backup tier: free-tier Supabase
+# has zero backups of any kind today. This is a self-contained GitHub
+# Actions job — daily pg_dump -> gzip -> Cloudflare R2, with automatic
+# retention. It does NOT touch the Hetzner/Coolify VPS, does NOT attempt
+# point-in-time recovery (that's a real, bigger tradeoff a paid Supabase
+# tier buys — this is blunter, daily-snapshot-only, on purpose), and does
+# NOT include a restore script — restoring is a manual `pg_restore`
+# against a downloaded dump when actually needed, not something to
+# automate blind before it's ever been exercised for real.
+
+on:
+  schedule:
+    # 09:17 UTC — off-peak for a US-based firm's business hours, and
+    # deliberately not on the hour (every workflow scheduled at exactly
+    # HH:00 competes for the same GitHub Actions queue slot).
+    - cron: '17 9 * * *'
+  workflow_dispatch:
+    inputs:
+      retention_count:
+        description: 'Override how many daily backups to keep (default 30). Lower this temporarily to test rotation without waiting weeks.'
+        required: false
+        default: ''
+
+# Never let two runs race each other's rotation logic (a manual dispatch
+# firing while the schedule is also running could otherwise both compute
+# "delete the oldest N" from a stale listing at the same time).
+concurrency:
+  group: db-backup
+  cancel-in-progress: false
+
+env:
+  # Supabase project ref is not a secret (it's the `ref` claim inside the
+  # public anon key's own JWT payload, and part of every REST/API URL
+  # this app already calls from the browser) — safe to hardcode. Only the
+  # actual Postgres password is sensitive; that's the one new secret this
+  # workflow needs (SUPABASE_DB_PASSWORD).
+  SUPABASE_PROJECT_REF: jrmouvvweiwmbvflwdtt
+  BACKUP_PREFIX: law-os-backups
+  DEFAULT_RETENTION_COUNT: 30
+  # Hard safety cap, independent of the retention count above — normal
+  # daily rotation with a 30-day retention deletes at most 1 object per
+  # run. If a run ever computes more deletions than this, that's a sign
+  # something is wrong (retention count changed drastically, listing
+  # returned something unexpected, first-time backfill) — refuse and fail
+  # loud rather than silently mass-delete.
+  MAX_DELETE_PER_RUN: 5
+  # Real R2 credentials, named to match what `aws s3`/`aws s3api` read
+  # automatically — set once here so every step below uses the exact
+  # same names instead of each step re-deriving its own local aliases
+  # (which is what caused an actual bug during review: a guard step that
+  # checked variable names that were never the names actually exported,
+  # so it silently claimed "missing" even when secrets were set. Single
+  # source of truth now.)
+  AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  AWS_DEFAULT_REGION: auto
+  R2_BUCKET: ${{ secrets.R2_BUCKET }}
+  R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Verify required secrets are present
+        env:
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: |
+          set -euo pipefail
+          missing=""
+          for v in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY R2_BUCKET R2_ENDPOINT SUPABASE_DB_PASSWORD; do
+            if [ -z "${!v:-}" ]; then missing="${missing} ${v}"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing required secret(s):${missing}. See this workflow file's header for what's needed from Isaac before this can run for real."
+            exit 1
+          fi
+          echo "All required secrets are present."
+
+      - name: Compute backup date/key
+        id: meta
+        run: |
+          DATE="$(date -u +%Y-%m-%d)"
+          echo "date=${DATE}" >> "$GITHUB_OUTPUT"
+          echo "file=backup-${DATE}.sql.gz" >> "$GITHUB_OUTPUT"
+          echo "key=${BACKUP_PREFIX}/${DATE}.sql.gz" >> "$GITHUB_OUTPUT"
+          RETENTION="${{ github.event.inputs.retention_count }}"
+          if [ -z "$RETENTION" ]; then RETENTION="$DEFAULT_RETENTION_COUNT"; fi
+          echo "retention=${RETENTION}" >> "$GITHUB_OUTPUT"
+
+      - name: Install postgresql-client and awscli
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+          pip install --quiet awscli
+
+      - name: Dump database
+        env:
+          PGPASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: |
+          set -euo pipefail
+          # Direct connection (not the pooler) — deterministic host for
+          # every Supabase project (db.<ref>.supabase.co:5432, user
+          # `postgres`), so nothing about the connection target had to be
+          # guessed or fabricated as a placeholder. If GitHub-hosted
+          # runners ever can't reach this host (some Supabase projects'
+          # direct connection is IPv6-only unless the IPv4 add-on is
+          # purchased), the fix is switching this one line to the
+          # Supavisor pooler connection string instead — flagged in the
+          # report, not guessed at here.
+          pg_dump "postgresql://postgres:${PGPASSWORD}@db.${SUPABASE_PROJECT_REF}.supabase.co:5432/postgres" \
+            --no-owner --no-privileges --format=plain \
+            | gzip -9 > "${{ steps.meta.outputs.file }}"
+
+      - name: Sanity-check the dump before trusting it
+        run: |
+          set -euo pipefail
+          FILE="${{ steps.meta.outputs.file }}"
+          if [ ! -s "$FILE" ]; then
+            echo "::error::Backup file is missing or 0 bytes — pg_dump failed silently. Refusing to upload or rotate anything."
+            exit 1
+          fi
+          SIZE=$(stat -c%s "$FILE")
+          echo "Backup file size: ${SIZE} bytes"
+          # A gzip'd plain-SQL dump of this app's real schema (18+
+          # migrations of tables/policies/functions) plus whatever data
+          # exists should always be comfortably over a few KB, even for a
+          # near-empty database — this threshold exists to catch
+          # "pg_dump silently produced a near-empty/truncated file", not
+          # to validate real data volume.
+          MIN_SIZE=2048
+          if [ "$SIZE" -lt "$MIN_SIZE" ]; then
+            echo "::error::Backup file is suspiciously small (${SIZE} bytes, expected at least ${MIN_SIZE}) — treating this as a failed backup. Refusing to upload or rotate anything."
+            exit 1
+          fi
+          gunzip -t "$FILE"
+          if ! zcat "$FILE" | head -n 20 | grep -q "PostgreSQL database dump"; then
+            echo "::error::File doesn't look like real pg_dump output (missing the expected header) — refusing to trust it."
+            exit 1
+          fi
+          echo "Dump passes sanity checks: real gzip, real pg_dump header, ${SIZE} bytes."
+
+      - name: Upload to R2
+        run: |
+          set -euo pipefail
+          aws s3 cp "${{ steps.meta.outputs.file }}" "s3://${R2_BUCKET}/${{ steps.meta.outputs.key }}" \
+            --endpoint-url "${R2_ENDPOINT}"
+          echo "Uploaded to ${{ steps.meta.outputs.key }}"
+
+      - name: Confirm the upload is really there
+        run: |
+          set -euo pipefail
+          REMOTE_SIZE=$(aws s3api head-object \
+            --bucket "${R2_BUCKET}" \
+            --key "${{ steps.meta.outputs.key }}" \
+            --endpoint-url "${R2_ENDPOINT}" \
+            --query 'ContentLength' --output text)
+          LOCAL_SIZE=$(stat -c%s "${{ steps.meta.outputs.file }}")
+          echo "Local size: ${LOCAL_SIZE}, remote size: ${REMOTE_SIZE}"
+          if [ "$REMOTE_SIZE" != "$LOCAL_SIZE" ]; then
+            echo "::error::Uploaded object size (${REMOTE_SIZE}) doesn't match the local dump (${LOCAL_SIZE}) — upload may be corrupt. Not proceeding to rotation."
+            exit 1
+          fi
+
+      - name: Rotate old backups (retain ${{ steps.meta.outputs.retention }})
+        env:
+          RETENTION: ${{ steps.meta.outputs.retention }}
+          TODAY_KEY: ${{ steps.meta.outputs.key }}
+        run: |
+          set -euo pipefail
+          KEYS="$(aws s3api list-objects-v2 \
+            --bucket "${R2_BUCKET}" \
+            --prefix "${BACKUP_PREFIX}/" \
+            --endpoint-url "${R2_ENDPOINT}" \
+            --query 'Contents[].Key' --output text | tr '\t' '\n' | sort)"
+          COUNT="$(echo "$KEYS" | grep -c . || true)"
+          echo "Found ${COUNT} backup(s) in R2, retention target ${RETENTION}."
+
+          # Confirmed today's own upload is actually in the listing before
+          # doing any deletion math — if it's missing, something is wrong
+          # with R2 list-consistency or the upload step, and rotating
+          # against an incomplete listing risks deleting a good backup
+          # while thinking a bad/missing one is the "newest".
+          if ! echo "$KEYS" | grep -qx "$TODAY_KEY"; then
+            echo "::error::Today's just-uploaded backup (${TODAY_KEY}) doesn't appear in the bucket listing yet — refusing to rotate against a listing that might be stale."
+            exit 1
+          fi
+
+          if [ "$COUNT" -le "$RETENTION" ]; then
+            echo "At or under retention — nothing to delete."
+            exit 0
+          fi
+
+          TO_DELETE_COUNT=$((COUNT - RETENTION))
+          if [ "$TO_DELETE_COUNT" -gt "$MAX_DELETE_PER_RUN" ]; then
+            echo "::error::Rotation would delete ${TO_DELETE_COUNT} backups in a single run — refusing (cap is ${MAX_DELETE_PER_RUN}/run). Normal daily rotation deletes at most 1. This many at once smells like a bug (retention count changed drastically, or the listing returned something unexpected) — investigate before re-running, don't just raise the cap."
+            exit 1
+          fi
+
+          OLDEST="$(echo "$KEYS" | head -n "$TO_DELETE_COUNT")"
+          echo "$OLDEST" | while IFS= read -r key; do
+            if [ -z "$key" ]; then continue; fi
+            if [ "$key" = "$TODAY_KEY" ]; then
+              echo "::error::Rotation selected today's just-uploaded backup (${key}) for deletion — refusing. This should be mathematically impossible when sorting oldest-first with COUNT > RETENTION; stop and investigate rather than deleting it."
+              exit 1
+            fi
+            echo "Deleting old backup: ${key}"
+            aws s3 rm "s3://${R2_BUCKET}/${key}" --endpoint-url "${R2_ENDPOINT}"
+          done
+
+      - name: Report failure to Sentry
+        if: failure()
+        env:
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SENTRY_DSN:-}" ]; then
+            echo "SENTRY_DSN secret not set — skipping Sentry report. The failed GitHub Action run is still the authoritative signal (this job has already failed above); add SENTRY_DSN as a secret (same DSN already used for the app, or a separate one) to also get this in Sentry."
+            exit 0
+          fi
+          # Same DSN-parsing + envelope shape as
+          # supabase/functions/_shared/sentry.ts, reimplemented in bash
+          # since this runs in a plain GitHub Actions shell, not Deno —
+          # calls Sentry's own envelope ingestion API directly, same as
+          # every edge function's error reporting already does.
+          DSN_NO_SCHEME="${SENTRY_DSN#https://}"
+          PUBLIC_KEY="${DSN_NO_SCHEME%%@*}"
+          REST="${DSN_NO_SCHEME#*@}"
+          HOST="${REST%%/*}"
+          PROJECT_ID="${REST#*/}"
+          if [ -z "$PUBLIC_KEY" ] || [ -z "$HOST" ] || [ -z "$PROJECT_ID" ] || [ "$PUBLIC_KEY" = "$DSN_NO_SCHEME" ]; then
+            echo "SENTRY_DSN is malformed — skipping Sentry report (non-fatal; the failed Action run is still the authoritative signal)."
+            exit 0
+          fi
+          INGEST_URL="https://${HOST}/api/${PROJECT_ID}/envelope/?sentry_key=${PUBLIC_KEY}&sentry_version=7"
+          # Built with plain bash string interpolation, not a python
+          # heredoc — every value going into this JSON is a known-safe
+          # generated value (a hex UUID, a unix timestamp, a github.com
+          # URL, a fixed message string), so no escaping hazard, and it
+          # sidesteps heredocs-inside-YAML-block-scalars entirely (a
+          # heredoc body at column 0 previously terminated the YAML `run:
+          # |` block early and broke the rest of this step — confirmed
+          # via a real YAML parse, not assumed).
+          EVENT_ID="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
+          TIMESTAMP="$(date -u +%s)"
+          SENT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          EVENT="{\"event_id\":\"${EVENT_ID}\",\"timestamp\":${TIMESTAMP},\"platform\":\"other\",\"level\":\"error\",\"environment\":\"production\",\"tags\":{\"workflow\":\"db-backup\"},\"extra\":{\"run_url\":\"${RUN_URL}\"},\"exception\":{\"values\":[{\"type\":\"Error\",\"value\":\"Database backup workflow failed - see GitHub Actions run for details\"}]}}"
+          HEADER="{\"event_id\":\"${EVENT_ID}\",\"sent_at\":\"${SENT_AT}\",\"dsn\":\"${SENTRY_DSN}\"}"
+          ENVELOPE="$(printf '%s\n%s\n%s\n' "$HEADER" '{"type":"event"}' "$EVENT")"
+          curl -sS -X POST "$INGEST_URL" -H "Content-Type: application/x-sentry-envelope" --data-binary "$ENVELOPE" \
+            || echo "Sentry report itself failed to send (non-fatal) — the failed Action run remains the authoritative signal."
