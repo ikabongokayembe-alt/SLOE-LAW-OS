@@ -30,7 +30,7 @@ export function ContextPanel({
   const [open, setOpen] = useState(false);
 
   return (
-    <div className="w-full lg:w-[35%] shrink-0 bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg p-4 lg:p-6 overflow-y-auto">
+    <div className="w-full lg:w-[19rem] shrink-0 bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg p-4 lg:p-6 overflow-y-auto">
       <button
         type="button"
         onClick={() => setOpen(o => !o)}

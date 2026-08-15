@@ -242,6 +242,33 @@ export interface LawDocument {
 // Postgres function (migration 0017), not the documents table directly,
 // so it carries a ready-to-render snippet instead of the full
 // extracted_text.
+// Operator/Analyst conversation threads (migration 0021). Private to
+// their creator at the RLS level — there is no firm-wide read, and no
+// principal/manager override, so any UI that implies otherwise would be
+// showing something the database will not return.
+export interface OperatorConversation {
+  id: string;
+  firm_id: string;
+  created_by: string;
+  agent: 'operator' | 'analyst';
+  title: string;
+  last_message_at: string;
+  // Set true by trigger on any assistant insert; cleared by the creator
+  // opening the thread. Never set by the user's own message.
+  unread: boolean;
+  created_at: string;
+  deleted_at?: string | null;
+}
+
+export interface OperatorMessage {
+  id: string;
+  conversation_id: string;
+  firm_id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  created_at: string;
+}
+
 // One attempt at getting a document signed via Dropbox Sign (migration
 // 0020). Deliberately a separate record per attempt rather than a column
 // on LawDocument: the same document can be sent more than once (declined,

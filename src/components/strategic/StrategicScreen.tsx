@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useStore } from '../../lib/store';
 import { callGemini, streamGeminiContent } from '../../lib/gemini';
@@ -8,6 +8,8 @@ import { buildFirmContext, ContextBuildResult } from '../../lib/contextBuilder';
 import { StrategicChat } from './StrategicChat';
 import { ContextPanel } from './ContextPanel';
 import { AiDisclaimer } from '../shared/AiDisclaimer';
+import { ConversationInbox } from '../agents/ConversationInbox';
+import { useConversationThread } from '../../lib/useConversationThread';
 
 // Same char budgets the old inline `.substring(0, N)` used — unchanged
 // here; what changed is what fills them (see contextBuilder.ts).
@@ -19,11 +21,17 @@ export function StrategicScreen() {
   const businessInsights = useMemo(() => insights.filter((i: any) => i.scope !== 'market'), [insights]);
 
   const [activeTab, setActiveTab] = useState('My Business');
-  const [chatHistory, setChatHistory] = useState<{ role: 'user' | 'assistant', content: string }[]>([]);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const bumpRail = useCallback(() => setRefreshKey(k => k + 1), []);
+  const { conversation, messages, streaming, busy, open, startNew, send } =
+    useConversationThread('analyst', bumpRail);
+  // StrategicChat still takes a plain {role, content}[]; mapping here
+  // keeps that component untouched rather than rewriting its rendering
+  // to know about persisted message rows.
+  const chatHistory = useMemo(
+    () => messages.map(m => ({ role: m.role, content: m.content })), [messages]);
   const [timeRange, setTimeRange] = useState('30D');
   const [inputValue, setInputValue] = useState('');
-  const [isTyping, setIsTyping] = useState(false);
-  const [streamingContent, setStreamingContent] = useState('');
   const [dismissedInsights, setDismissedInsights] = useState<Set<string>>(new Set());
   const [regenerating, setRegenerating] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
@@ -44,36 +52,21 @@ export function StrategicScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleSend = async (overrideText?: string) => {
+  const handleSend = (overrideText?: string) => {
     const textToSend = overrideText ?? inputValue;
-    if (!textToSend.trim() || isTyping) return;
-
-    const userMsg = textToSend;
+    if (!textToSend.trim() || busy) return;
     setInputValue('');
-    setChatHistory(prev => [...prev, { role: 'user', content: userMsg }]);
-    setIsTyping(true);
-    setStreamingContent('');
-
-    // Firm jurisdiction (country/region) travels with every request so the
-    // Analyst can reason about which legal system it's operating in
-    // without the user having to mention it — see migration 0007.
-    const built = buildFirmContext({
-      matters, deadlines, parties, conflictChecks,
-      firm_jurisdiction: { country: firm?.country ?? null, region: firm?.region ?? null },
-    }, CHAT_CONTEXT_BUDGET);
-    setLastContextUsage(built);
-
-    try {
-      const fullResponse = await streamGeminiContent(
-         strategicChatPrompt(userMsg, chatHistory, built.text),
-         (chunk) => { setStreamingContent(chunk); }
-      );
-      setChatHistory(prev => [...prev, { role: 'assistant', content: fullResponse }]);
-    } catch (e) {
-      setChatHistory(prev => [...prev, { role: 'assistant', content: 'Sorry, I encountered an error analyzing your data.' }]);
-    }
-    setStreamingContent('');
-    setIsTyping(false);
+    send(textToSend, (history, onChunk) => {
+      // Firm jurisdiction (country/region) travels with every request so
+      // the Analyst can reason about which legal system it's operating in
+      // without the user having to mention it — see migration 0007.
+      const built = buildFirmContext({
+        matters, deadlines, parties, conflictChecks,
+        firm_jurisdiction: { country: firm?.country ?? null, region: firm?.region ?? null },
+      }, CHAT_CONTEXT_BUDGET);
+      setLastContextUsage(built);
+      return streamGeminiContent(strategicChatPrompt(textToSend, history, built.text), onChunk);
+    });
   };
 
   const regenerateInsights = async () => {
@@ -129,13 +122,20 @@ export function StrategicScreen() {
       </div>
 
       <div className="flex flex-col lg:flex-row flex-1 min-h-0 overflow-hidden gap-4 lg:gap-6">
+         <ConversationInbox
+           agent="analyst"
+           activeId={conversation?.id ?? null}
+           onSelect={open}
+           onNew={() => { startNew(); setInputValue(''); }}
+           refreshKey={refreshKey}
+         />
          <StrategicChat
            chatHistory={chatHistory}
-           streamingContent={streamingContent}
+           streamingContent={streaming}
            inputValue={inputValue}
            setInputValue={setInputValue}
            handleSend={handleSend}
-           isTyping={isTyping}
+           isTyping={busy}
            visibleInsights={visibleInsights}
            onDismissInsight={(id: string) => setDismissedInsights(prev => new Set(prev).add(id))}
          />

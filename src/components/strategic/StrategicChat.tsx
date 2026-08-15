@@ -32,7 +32,7 @@ export function StrategicChat({
   };
 
   return (
-    <div className="w-full lg:w-[65%] flex-1 min-h-0 lg:flex-none flex flex-col relative bg-[var(--bg-primary)]">
+    <div className="w-full flex-1 min-h-0 flex flex-col relative bg-[var(--bg-primary)]">
       <div className="flex-1 overflow-y-auto pr-0 lg:pr-4 pb-20 space-y-6" ref={scrollRef}>
          {!hasInteracted && visibleInsights.map((ins: Insight) => (
             <ProactiveInsightCard key={ins.id} insight={ins} onDismiss={() => onDismissInsight(ins.id)} />
