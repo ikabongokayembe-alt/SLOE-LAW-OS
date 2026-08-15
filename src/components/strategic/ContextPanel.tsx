@@ -1,3 +1,5 @@
+import { useState } from 'react';
+import { ChevronDown } from 'lucide-react';
 import { useStore } from '../../lib/store';
 import { ContextBuildResult } from '../../lib/contextBuilder';
 
@@ -18,11 +20,30 @@ export function ContextPanel({
 }: { activeTab: string; hasInteracted: boolean; contextUsage: ContextBuildResult | null }) {
   const { matters, deadlines, parties } = useStore();
 
-  return (
-    <div className="w-[35%] bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg p-6 overflow-y-auto">
-      <h3 className="text-xs uppercase font-mono tracking-widest text-[var(--text-tertiary)] mb-6">Context in use</h3>
+  // Below lg this panel is a collapsible disclosure rather than a side
+  // column: at 375-414px a 35% column leaves the chat ~240px and wraps
+  // this panel's text to one word per line, and the two overlap. Starts
+  // collapsed so the chat owns the viewport, but the toggle is always
+  // visible so the context stays one tap away — it is never hidden with
+  // no way back. At lg+ the toggle is gone and the panel is always open,
+  // exactly as before.
+  const [open, setOpen] = useState(false);
 
-      <div className="space-y-4">
+  return (
+    <div className="w-full lg:w-[35%] shrink-0 bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg p-4 lg:p-6 overflow-y-auto">
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        aria-expanded={open}
+        aria-controls="context-panel-body"
+        className="lg:hidden w-full flex items-center justify-between gap-2 text-xs uppercase font-mono tracking-widest text-[var(--text-tertiary)]"
+      >
+        <span>Context in use</span>
+        <ChevronDown className={`w-4 h-4 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      <h3 className="hidden lg:block text-xs uppercase font-mono tracking-widest text-[var(--text-tertiary)] mb-6">Context in use</h3>
+
+      <div id="context-panel-body" className={`${open ? 'block' : 'hidden'} lg:block mt-4 lg:mt-0 space-y-4`}>
         <div className="bg-[var(--bg-tertiary)] border border-[var(--border-default)] rounded px-4 py-3">
            <div className="text-[10px] font-mono text-[var(--text-tertiary)] mb-1">DATA SOURCE</div>
            {contextUsage ? (

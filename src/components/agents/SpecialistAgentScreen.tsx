@@ -95,7 +95,7 @@ export function SpecialistAgentScreen() {
 
   return (
     <div className="flex flex-col h-[calc(100vh-56px)] -mx-4 md:-mx-8 -mt-6">
-      <div className="h-16 bg-[var(--bg-secondary)] border-b border-[var(--border-subtle)] px-4 md:px-8 flex items-center justify-between gap-2 shrink-0">
+      <div className="min-h-[4rem] bg-[var(--bg-secondary)] border-b border-[var(--border-subtle)] px-4 md:px-8 py-2 sm:py-0 flex flex-col sm:flex-row sm:items-center justify-between gap-1 sm:gap-2 shrink-0">
         <div className="flex items-center gap-2 min-w-0">
           <specialist.icon className="w-4 h-4 text-[var(--text-secondary)] shrink-0" />
           <h2 className="text-sm font-medium truncate">{specialist.name}</h2>

@@ -32,8 +32,8 @@ export function StrategicChat({
   };
 
   return (
-    <div className="w-[65%] flex flex-col relative bg-[var(--bg-primary)]">
-      <div className="flex-1 overflow-y-auto pr-4 pb-20 space-y-6" ref={scrollRef}>
+    <div className="w-full lg:w-[65%] flex-1 min-h-0 lg:flex-none flex flex-col relative bg-[var(--bg-primary)]">
+      <div className="flex-1 overflow-y-auto pr-0 lg:pr-4 pb-20 space-y-6" ref={scrollRef}>
          {!hasInteracted && visibleInsights.map((ins: Insight) => (
             <ProactiveInsightCard key={ins.id} insight={ins} onDismiss={() => onDismissInsight(ins.id)} />
          ))}
@@ -63,7 +63,7 @@ export function StrategicChat({
          )}
       </div>
 
-      <div className={`absolute bottom-0 left-0 right-4 transition-all duration-300`}>
+      <div className={`absolute bottom-0 left-0 right-0 lg:right-4 transition-all duration-300`}>
         <div className="bg-[var(--bg-secondary)] border border-[var(--border-default)] rounded-xl shadow-[var(--shadow-elevated)] relative flex items-end">
           <textarea 
             value={inputValue}

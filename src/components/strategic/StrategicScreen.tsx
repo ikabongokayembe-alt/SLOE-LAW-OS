@@ -102,18 +102,18 @@ export function StrategicScreen() {
   const hasInteracted = chatHistory.length > 0 || visibleInsights.length < businessInsights.length;
 
   return (
-    <div className="flex flex-col h-[calc(100vh-140px)]">
-      <div className="flex justify-between items-start mb-6">
+    <div className="flex flex-col h-[calc(100dvh-190px)] lg:h-[calc(100vh-140px)]">
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-3 mb-6">
         <div>
            <h2 className="text-xl font-medium mb-1">Analyst</h2>
            <p className="text-sm text-[var(--text-secondary)] font-mono mb-1.5">Patterns and recommendations from your operating data</p>
            <AiDisclaimer />
         </div>
-        <div className="flex space-x-3 items-center">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3 w-full sm:w-auto">
           <button onClick={regenerateInsights} disabled={regenerating} className="h-8 px-3 text-xs rounded bg-[var(--bg-tertiary)] border border-[var(--border-default)] hover:bg-[var(--bg-elevated)] disabled:opacity-50">
             {regenerating ? 'Regenerating…' : 'Regenerate insights'}
           </button>
-          <select className="h-8 bg-[var(--bg-tertiary)] border border-[var(--border-default)] rounded px-3 text-xs w-48 focus:outline-none" value={activeTab} onChange={(e) => setActiveTab(e.target.value)}>
+          <select className="h-8 bg-[var(--bg-tertiary)] border border-[var(--border-default)] rounded px-3 text-xs flex-1 min-w-[9rem] sm:flex-none sm:w-48 focus:outline-none" value={activeTab} onChange={(e) => setActiveTab(e.target.value)}>
              <option>My Business</option>
              <option>A Specific Matter</option>
              <option>A Specific Client</option>
@@ -128,7 +128,7 @@ export function StrategicScreen() {
         </div>
       </div>
 
-      <div className="flex flex-1 overflow-hidden space-x-6">
+      <div className="flex flex-col lg:flex-row flex-1 min-h-0 overflow-hidden gap-4 lg:gap-6">
          <StrategicChat
            chatHistory={chatHistory}
            streamingContent={streamingContent}
