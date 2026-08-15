@@ -102,16 +102,22 @@ jobs:
           PGPASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
         run: |
           set -euo pipefail
-          # Direct connection (not the pooler) — deterministic host for
-          # every Supabase project (db.<ref>.supabase.co:5432, user
-          # `postgres`), so nothing about the connection target had to be
-          # guessed or fabricated as a placeholder. If GitHub-hosted
-          # runners ever can't reach this host (some Supabase projects'
-          # direct connection is IPv6-only unless the IPv4 add-on is
-          # purchased), the fix is switching this one line to the
-          # Supavisor pooler connection string instead — flagged in the
-          # report, not guessed at here.
-          pg_dump "postgresql://postgres:${PGPASSWORD}@db.${SUPABASE_PROJECT_REF}.supabase.co:5432/postgres" \
+          # Supavisor SESSION pooler, not the direct connection. The
+          # direct host (db.<ref>.supabase.co:5432) is IPv6-only on this
+          # project, and GitHub-hosted runners have no IPv6 route to it —
+          # confirmed from a real failed run's log, which is exactly the
+          # fallback the previous revision of this comment predicted.
+          #
+          # Port 5432 on the pooler host is session mode; 6543 on the same
+          # host is TRANSACTION mode. pg_dump must use session mode: it
+          # relies on prepared statements and on holding one consistent
+          # snapshot across many statements, and transaction pooling
+          # reassigns the backend connection between statements, which
+          # breaks both. Do not "simplify" this to 6543.
+          #
+          # Pooler username is `postgres.<project-ref>` (tenant-qualified),
+          # not the bare `postgres` the direct connection uses.
+          pg_dump "postgresql://postgres.jrmouvvweiwmbvflwdtt:${PGPASSWORD}@aws-1-us-west-2.pooler.supabase.com:5432/postgres" \
             --no-owner --no-privileges --format=plain \
             | gzip -9 > "${{ steps.meta.outputs.file }}"
 
