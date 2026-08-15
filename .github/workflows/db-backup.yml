@@ -90,11 +90,44 @@ jobs:
           if [ -z "$RETENTION" ]; then RETENTION="$DEFAULT_RETENTION_COUNT"; fi
           echo "retention=${RETENTION}" >> "$GITHUB_OUTPUT"
 
-      - name: Install postgresql-client and awscli
+      - name: Install postgresql-client 17 and awscli
         run: |
           set -euo pipefail
+          # ubuntu-latest ships postgresql-client 16, but this Supabase
+          # project runs Postgres 17.6, and pg_dump hard-refuses to dump a
+          # server newer than itself ("server version 17.6; pg_dump
+          # version 16.14") — that's how the previous real run failed.
+          # Ubuntu's own repos carry no postgresql-client-17 at all, so
+          # this pulls it from the PostgreSQL project's own APT repo
+          # (PGDG), which is the upstream-supported source for it.
           sudo apt-get update -qq
-          sudo apt-get install -y -qq postgresql-client
+          sudo apt-get install -y -qq curl ca-certificates
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          . /etc/os-release
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-17
+
+          # Put the versioned bin dir ahead of /usr/bin for later steps
+          # rather than trusting bare `pg_dump`: /usr/bin/pg_dump is the
+          # postgresql-common wrapper, and with both 16 and 17 installed
+          # which binary it selects comes down to wrapper heuristics.
+          # Pinning the path removes that guess entirely.
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
+
+          # Fail here, loudly, rather than 200 lines later in the dump —
+          # GITHUB_PATH only applies to *subsequent* steps, so this check
+          # has to use the absolute path.
+          /usr/lib/postgresql/17/bin/pg_dump --version
+          MAJOR="$(/usr/lib/postgresql/17/bin/pg_dump --version | sed -E 's/.* ([0-9]+).*/\1/')"
+          if [ "$MAJOR" -lt 17 ]; then
+            echo "::error::pg_dump is major version ${MAJOR}, need >= 17 to dump this server"
+            exit 1
+          fi
+
           pip install --quiet awscli
 
       - name: Dump database
