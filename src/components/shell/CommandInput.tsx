@@ -1,10 +1,18 @@
 import { useState, useEffect, useRef } from 'react';
 
+// These rotate in the global ⌘K field, so they sit at the top of every
+// screen in the product — which made the previous set the single most
+// visible thing wrong with the app: real-estate copy inherited from a
+// sibling Sloe product ("Marassi leads", "Which properties match the
+// Saudi family looking in Amwaj?", "conversion rate on Russian investor
+// leads"). A prospective firm read "leads" and "properties" above their
+// own caseload. Replaced with questions this product can actually
+// answer, phrased the way a practising attorney would ask them.
 const placeholders = [
-  "Show me all Marassi leads I haven't followed up with in 48 hours",
-  "Which properties match the Saudi family looking in Amwaj?",
-  "What's my conversion rate on Russian investor leads this quarter?",
-  "Draft a follow-up in Arabic for my highest-urgency lead"
+  "Which matters have a filing deadline in the next 14 days?",
+  "Has anyone at this firm ever acted against Marcus Chen?",
+  "Draft a client update for the Chen custody matter",
+  "What should I prioritise before Friday's hearing?"
 ];
 
 export function CommandInput() {
