@@ -8,6 +8,9 @@
 // Deploy:  supabase functions deploy welcome-email
 // Secret:  supabase secrets set RESEND_API_KEY=...
 //          supabase secrets set RESEND_FROM="Law OS <law@sloelabs.com>"
+//          supabase secrets set SENTRY_DSN=...  (error monitoring — see _shared/sentry.ts; optional, no-ops if unset)
+
+import { reportError } from '../_shared/sentry.ts';
 
 // @ts-ignore Deno global is available in the Supabase Edge Function runtime
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY');
@@ -113,7 +116,12 @@ Deno.serve(async (req: Request) => {
   } catch (err) {
     // Non-fatal by design — the caller (auth.tsx) fires this without
     // awaiting/blocking navigation, so an email failure never stops
-    // someone from using their new account.
+    // someone from using their new account. Still worth knowing about
+    // (a systemic Resend/DNS failure here means EVERY new signup is
+    // silently missing their welcome email) — reported to Sentry rather
+    // than only living in ephemeral function logs.
+    console.error('[welcome-email] failed:', String((err as Error)?.message ?? err));
+    await reportError(err, { functionName: 'welcome-email' });
     return new Response(JSON.stringify({ error: String(err?.message ?? err) }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },

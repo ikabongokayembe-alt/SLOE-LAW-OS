@@ -1,12 +1,15 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useStore } from '../../lib/store';
 import { useAuth } from '../../lib/auth';
-import { X, Search, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { X, Search, AlertTriangle, CheckCircle2, Scale } from 'lucide-react';
+import {
+  findMatchingRules, computeRuleDate, triggerEventLabel, ruleFramingLabel, ruleFramingSentence, deadlineTitleFromRule, ruleDisclaimer,
+} from '../../lib/deadlineRules';
 
 type Step = 'client' | 'conflict' | 'details';
 
 export function NewMatterModal({ onClose }: { onClose: () => void }) {
-  const { parties, addParty, runConflictCheck, clearConflictCheck, addMatter, matterStages, practiceAreas, attorneys } = useStore();
+  const { parties, addParty, runConflictCheck, clearConflictCheck, addMatter, addDeadline, matterStages, practiceAreas, attorneys, firm, deadlineRules } = useStore();
   const { profile } = useAuth();
   const [step, setStep] = useState<Step>('client');
   const [clientName, setClientName] = useState('');
@@ -22,6 +25,20 @@ export function NewMatterModal({ onClose }: { onClose: () => void }) {
   const [attorneyId, setAttorneyId] = useState(profile?.attorney_id ?? '');
   const [billingType, setBillingType] = useState<'hourly' | 'contingency' | 'flat_fee' | 'retainer'>('hourly');
   const [submitting, setSubmitting] = useState(false);
+
+  // Statute-of-limitations engine: a suggestion, never automatic. Matches
+  // by the practice area's `key` (deadline_rules.practice_area convention)
+  // against the firm's own jurisdiction — see migration 0011 / src/lib/deadlineRules.ts.
+  const selectedPracticeArea = practiceAreas.find(p => p.id === practiceAreaId);
+  const matchingRules = useMemo(
+    () => findMatchingRules(deadlineRules, firm?.country, firm?.region, selectedPracticeArea?.key),
+    [deadlineRules, firm?.country, firm?.region, selectedPracticeArea?.key]
+  );
+  const [selectedRuleId, setSelectedRuleId] = useState<string>('');
+  const selectedRule = matchingRules.find(r => r.id === selectedRuleId) ?? matchingRules[0] ?? null;
+  const [triggerDate, setTriggerDate] = useState('');
+  const [createDeadline, setCreateDeadline] = useState(false);
+  const computedDate = selectedRule && triggerDate ? computeRuleDate(selectedRule, triggerDate) : null;
 
   const initialStage = [...matterStages].sort((a, b) => a.sort_order - b.sort_order).find(s => s.is_initial);
 
@@ -66,6 +83,21 @@ export function NewMatterModal({ onClose }: { onClose: () => void }) {
       conflict_check_id: conflictCheckId,
       opened_date: new Date().toISOString().slice(0, 10),
     });
+    // Opt-in only — a matching rule and a filled-in trigger date are not
+    // enough on their own; "create this deadline" has to be explicitly
+    // checked. Matter creation itself never fails or blocks on this.
+    if (matter && createDeadline && selectedRule && computedDate) {
+      await addDeadline({
+        matter_id: matter.id,
+        title: deadlineTitleFromRule(selectedRule),
+        deadline_type: 'statute_of_limitations',
+        due_date: computedDate,
+        status: 'upcoming',
+        assigned_to: attorneyId || null,
+        is_critical: true,
+        reminder_days_before: 90,
+      });
+    }
     setSubmitting(false);
     if (matter) onClose();
   };
@@ -148,6 +180,70 @@ export function NewMatterModal({ onClose }: { onClose: () => void }) {
                   {practiceAreas.filter(p => p.is_active).map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
                 </select>
               </div>
+
+              {/* Statute-of-limitations engine: deterministic lookup only,
+                  never AI-generated — see migration 0011. A suggestion the
+                  person has to explicitly opt into, never automatic. */}
+              {firm?.country && (
+                matchingRules.length > 0 ? (
+                  <div className="border border-[var(--accent-secondary)]/30 bg-[var(--accent-secondary)]/5 rounded-lg p-3 space-y-2">
+                    <div className="flex items-center gap-1.5 text-[10px] uppercase font-mono tracking-wider text-[var(--accent-secondary)]">
+                      <Scale className="w-3 h-3" /> Suggested deadline
+                    </div>
+
+                    {matchingRules.length > 1 && (
+                      <select
+                        value={selectedRule?.id ?? ''}
+                        onChange={e => { setSelectedRuleId(e.target.value); setTriggerDate(''); setCreateDeadline(false); }}
+                        className="w-full h-9 px-3 bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded text-xs focus:outline-none"
+                      >
+                        {matchingRules.map(r => (
+                          <option key={r.id} value={r.id}>{ruleFramingLabel(r)} — {triggerEventLabel(r.trigger_event)} ({r.citation})</option>
+                        ))}
+                      </select>
+                    )}
+
+                    {selectedRule && (
+                      <>
+                        <div>
+                          <label className="text-[10px] uppercase font-mono tracking-wider text-[var(--text-tertiary)] block mb-1">{triggerEventLabel(selectedRule.trigger_event)}</label>
+                          <input
+                            type="date"
+                            value={triggerDate}
+                            onChange={e => setTriggerDate(e.target.value)}
+                            className="w-full h-9 px-3 bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded text-sm focus:outline-none"
+                          />
+                        </div>
+
+                        {computedDate && (
+                          <div className="text-xs space-y-1.5">
+                            <div className="font-medium text-[var(--text-primary)]">
+                              {ruleFramingLabel(selectedRule)}: {computedDate}
+                            </div>
+                            <div className="text-[var(--text-secondary)]">{ruleFramingSentence(selectedRule, computedDate)}</div>
+                            {selectedRule.notes && <div className="text-[var(--text-tertiary)] italic">{selectedRule.notes}</div>}
+                            {selectedRule.exceptions && (
+                              <div className="text-[var(--text-tertiary)]"><span className="font-medium">Exceptions:</span> {selectedRule.exceptions}</div>
+                            )}
+                            <div className="text-[var(--text-tertiary)] pt-1 border-t border-[var(--border-subtle)]">
+                              <span className="font-medium">{selectedRule.citation}</span> — {ruleDisclaimer(selectedRule)}
+                            </div>
+                            <label className="flex items-center gap-2 pt-1 cursor-pointer">
+                              <input type="checkbox" checked={createDeadline} onChange={e => setCreateDeadline(e.target.checked)} className="rounded" />
+                              <span>Also create this deadline when I open the matter</span>
+                            </label>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                ) : (
+                  <div className="text-xs text-[var(--text-tertiary)] italic">
+                    No automated rule yet for this jurisdiction/practice area — set the deadline manually.
+                  </div>
+                )
+              )}
+
               <div>
                 <label className="text-[10px] uppercase font-mono tracking-wider text-[var(--text-tertiary)] block mb-1">Assigned attorney</label>
                 <select value={attorneyId} onChange={e => setAttorneyId(e.target.value)} className="w-full h-10 px-3 bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded text-sm focus:outline-none">

@@ -1,0 +1,26 @@
+-- Agent Library fulfillment, stage one: notify on request instead of
+-- leaving a row that nobody looks at. This migration only adds the one
+-- column needed to track whether that notification actually went out.
+--
+-- Note: `agent_requests` itself predates migration tracking in this repo —
+-- it isn't created anywhere in 0001-0008, so it was provisioned directly
+-- against the live database at some earlier point outside this history
+-- (store.tsx has always queried/inserted it: `tenant_id`, `agent_key`,
+-- `status`). This migration does NOT attempt to reconstruct/assert that
+-- table's full definition — doing that without being able to verify the
+-- live schema first would risk shipping a guess as fact. It only adds a
+-- new column, guarded with IF NOT EXISTS, which is safe regardless of
+-- exactly what else is already on the table.
+--
+-- `notified_at`: stamped by the agent-request-notify edge function after
+-- it successfully sends the Resend email for a given request (service-role
+-- write, since the requesting user's own session may not have UPDATE
+-- rights on this table — see the edge function for the actual write).
+-- Nullable and never backfilled for existing rows on purpose: a null here
+-- honestly means "we don't know whether this one was ever notified"
+-- (everything inserted before this stage-one build), not "notification
+-- failed." Going forward, null after a request should mean the
+-- notification genuinely didn't go out yet (or failed) and is a real
+-- candidate for a manual resend — that's what makes it useful for a
+-- future stage-two build without doing more work here than asked.
+alter table agent_requests add column if not exists notified_at timestamptz;

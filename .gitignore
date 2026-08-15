@@ -8,3 +8,6 @@ coverage/
 !.env.example
 !.env.production
 
+
+# Supabase CLI scratch (project refs, versions, pooler URL) — not source
+supabase/.temp/

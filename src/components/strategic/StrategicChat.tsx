@@ -72,8 +72,8 @@ export function StrategicChat({
             placeholder="Ask a strategic question about your business..."
             className="w-full min-h-[64px] max-h-[160px] bg-transparent resize-none p-5 text-sm focus:outline-none placeholder:text-[var(--text-tertiary)] scrollbar-none"
           />
-          <button 
-            onClick={handleSend}
+          <button
+            onClick={() => handleSend()}
             disabled={!inputValue.trim() || isTyping}
             className="absolute right-4 bottom-4 w-8 h-8 rounded-md bg-[var(--text-primary)] text-[var(--bg-primary)] flex items-center justify-center disabled:opacity-50 hover:bg-white transition-colors"
           >

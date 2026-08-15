@@ -1,4 +1,5 @@
 import { Component, ReactNode } from 'react';
+import * as Sentry from '@sentry/react';
 
 interface Props { children: ReactNode; }
 interface State { error: Error | null; }
@@ -16,6 +17,10 @@ export class RootErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, info: { componentStack: string }) {
     console.error('[RootErrorBoundary] caught:', error, info.componentStack);
+    // Sentry.captureException is a documented no-op when Sentry.init was
+    // never called (no VITE_SENTRY_DSN) — this line is safe in local dev
+    // and doesn't need its own env-var check.
+    Sentry.captureException(error, { contexts: { react: { componentStack: info.componentStack } } });
   }
 
   render() {

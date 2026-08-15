@@ -4,6 +4,7 @@ import { AgentLibraryTeaserCard } from './AgentLibraryTeaserCard';
 import { Sparkline } from './Sparkline';
 import { Link, useNavigate } from 'react-router-dom';
 import { AlertTriangle, Sparkles } from 'lucide-react';
+import { formatDateOnly } from '../../lib/dates';
 
 function daysUntil(dateStr: string): number {
   return Math.round((new Date(dateStr).getTime() - new Date().setHours(0, 0, 0, 0)) / 86400000);
@@ -39,7 +40,8 @@ function StatCard({ label, value, negative, sparklineData, sparklineColor }: { l
 }
 
 export function DashboardScreen() {
-  const { matters, deadlines, conflictChecks, parties } = useStore();
+  const { matters, deadlines, conflictChecks, parties, firm } = useStore();
+  const locale = firm?.locale || 'en-US';
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
 
@@ -105,7 +107,7 @@ export function DashboardScreen() {
                 <div key={d.id} className="flex items-center gap-2 text-sm">
                   <AlertTriangle className="w-3.5 h-3.5 text-[var(--signal-negative)] shrink-0" />
                   <span className="flex-1 truncate">{d.title}</span>
-                  <span className="text-xs text-[var(--text-tertiary)] shrink-0">{new Date(d.due_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</span>
+                  <span className="text-xs text-[var(--text-tertiary)] shrink-0">{formatDateOnly(d.due_date, locale, { day: 'numeric', month: 'short' })}</span>
                 </div>
               ))}
             </div>
@@ -127,7 +129,7 @@ export function DashboardScreen() {
                     <div className="truncate">{m.title}</div>
                     <div className="text-xs text-[var(--text-tertiary)] truncate">{clientName(m.client_party_id)}</div>
                   </div>
-                  <span className="text-xs text-[var(--text-tertiary)] shrink-0 ml-2">{new Date(m.opened_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</span>
+                  <span className="text-xs text-[var(--text-tertiary)] shrink-0 ml-2">{formatDateOnly(m.opened_date, locale, { day: 'numeric', month: 'short' })}</span>
                 </div>
               ))}
             </div>

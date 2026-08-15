@@ -1,9 +1,11 @@
 import { NavLink, useNavigate, useLocation } from 'react-router-dom';
-import { Home, Briefcase, Clock, Users, ChevronDown, ChevronRight, UsersRound, LogOut, Wrench, Sparkles, Plug, Search, FileText } from 'lucide-react';
+import { Home, Briefcase, Clock, Users, ChevronDown, ChevronRight, UsersRound, LogOut, Wrench, Sparkles, Plug, Search, FileText, Settings, Timer, Mail, History } from 'lucide-react';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { useState } from 'react';
 import { useAuth } from '../../lib/auth';
+import { useStore } from '../../lib/store';
+import { getSpecialist } from '../../data/specialists';
 
 const cn = (...inputs: (string | undefined | null | false)[]) => twMerge(clsx(inputs));
 
@@ -12,10 +14,11 @@ const ROLE_LABELS: Record<string, string> = {
   paralegal: 'Paralegal', billing: 'Billing', reception: 'Reception',
 };
 
-const OPERATIONS_PATHS = ['/matters', '/deadlines', '/parties'];
+const OPERATIONS_PATHS = ['/matters', '/deadlines', '/parties', '/documents', '/time', '/communications', '/history'];
 
 export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
   const { profile, isDevMode, signOut } = useAuth();
+  const { agentRequests } = useStore();
   const navigate = useNavigate();
   const location = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -68,6 +71,9 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
               <NavLink to="/deadlines" className={navItemClass} onClick={onNavigate}><Clock className={iconClass} /><span>Deadlines</span></NavLink>
               <NavLink to="/parties" className={navItemClass} onClick={onNavigate}><Search className={iconClass} /><span>Conflict Check</span></NavLink>
               <NavLink to="/documents" className={navItemClass} onClick={onNavigate}><FileText className={iconClass} /><span>Documents</span></NavLink>
+              <NavLink to="/time" className={navItemClass} onClick={onNavigate}><Timer className={iconClass} /><span>Time</span></NavLink>
+              <NavLink to="/communications" className={navItemClass} onClick={onNavigate}><Mail className={iconClass} /><span>Communications</span></NavLink>
+              <NavLink to="/history" className={navItemClass} onClick={onNavigate}><History className={iconClass} /><span>History</span></NavLink>
             </div>
           )}
         </div>
@@ -77,6 +83,18 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
           <div className="space-y-0.5">
             <NavLink to="/operator" className={navItemClass} onClick={onNavigate}><Wrench className={iconClass} /><span>Operator</span></NavLink>
             <NavLink to="/analyst" className={navItemClass} onClick={onNavigate}><Sparkles className={iconClass} /><span>Analyst</span></NavLink>
+            {/* Instant self-provisioning: a specialist appears here the moment
+                its agent_requests row exists — no reload needed, since this
+                just reflects live store state. */}
+            {agentRequests.map(r => {
+              const specialist = getSpecialist(r.agent_key);
+              if (!specialist) return null;
+              return (
+                <NavLink key={r.id} to={`/agents/${specialist.key}`} className={navItemClass} onClick={onNavigate}>
+                  <specialist.icon className={iconClass} /><span className="truncate">{specialist.name}</span>
+                </NavLink>
+              );
+            })}
           </div>
         </div>
 
@@ -89,6 +107,9 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
               )}
               {canSeeIntegrations && (
                 <NavLink to="/integrations" className={navItemClass} onClick={onNavigate}><Plug className={iconClass} /><span>Integrations</span></NavLink>
+              )}
+              {canSeeTeam && (
+                <NavLink to="/settings" className={navItemClass} onClick={onNavigate}><Settings className={iconClass} /><span>Firm Settings</span></NavLink>
               )}
             </div>
           </div>

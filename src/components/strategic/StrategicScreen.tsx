@@ -3,12 +3,19 @@ import { useSearchParams } from 'react-router-dom';
 import { useStore } from '../../lib/store';
 import { callGemini, streamGeminiContent } from '../../lib/gemini';
 import { strategicChatPrompt, strategicInsightsPrompt } from '../../lib/prompts';
+import { buildFirmContext, ContextBuildResult } from '../../lib/contextBuilder';
 
 import { StrategicChat } from './StrategicChat';
 import { ContextPanel } from './ContextPanel';
+import { AiDisclaimer } from '../shared/AiDisclaimer';
+
+// Same char budgets the old inline `.substring(0, N)` used — unchanged
+// here; what changed is what fills them (see contextBuilder.ts).
+const CHAT_CONTEXT_BUDGET = 3000;
+const INSIGHTS_CONTEXT_BUDGET = 5000;
 
 export function StrategicScreen() {
-  const { matters, deadlines, parties, conflictChecks, insights, addInsights } = useStore();
+  const { matters, deadlines, parties, conflictChecks, insights, addInsights, firm } = useStore();
   const businessInsights = useMemo(() => insights.filter((i: any) => i.scope !== 'market'), [insights]);
 
   const [activeTab, setActiveTab] = useState('My Business');
@@ -20,6 +27,10 @@ export function StrategicScreen() {
   const [dismissedInsights, setDismissedInsights] = useState<Set<string>>(new Set());
   const [regenerating, setRegenerating] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
+  // What the MOST RECENT request (chat or insights) actually sent to the
+  // model — ContextPanel renders this, never the full store state, so it
+  // can't claim to have analyzed data that got omitted for length.
+  const [lastContextUsage, setLastContextUsage] = useState<ContextBuildResult | null>(null);
 
   // Arriving from the Command Center's "ask" banner with a real question
   // pre-filled — auto-send it once, then clear the param so a page
@@ -43,11 +54,18 @@ export function StrategicScreen() {
     setIsTyping(true);
     setStreamingContent('');
 
-    const contextContext = { matters, deadlines, parties, conflictChecks };
+    // Firm jurisdiction (country/region) travels with every request so the
+    // Analyst can reason about which legal system it's operating in
+    // without the user having to mention it — see migration 0007.
+    const built = buildFirmContext({
+      matters, deadlines, parties, conflictChecks,
+      firm_jurisdiction: { country: firm?.country ?? null, region: firm?.region ?? null },
+    }, CHAT_CONTEXT_BUDGET);
+    setLastContextUsage(built);
 
     try {
       const fullResponse = await streamGeminiContent(
-         strategicChatPrompt(userMsg, chatHistory, contextContext),
+         strategicChatPrompt(userMsg, chatHistory, built.text),
          (chunk) => { setStreamingContent(chunk); }
       );
       setChatHistory(prev => [...prev, { role: 'assistant', content: fullResponse }]);
@@ -61,7 +79,9 @@ export function StrategicScreen() {
   const regenerateInsights = async () => {
     setRegenerating(true);
     try {
-      const res = await callGemini(strategicInsightsPrompt({ matters, deadlines, parties, conflictChecks }));
+      const built = buildFirmContext({ matters, deadlines, parties, conflictChecks }, INSIGHTS_CONTEXT_BUDGET);
+      setLastContextUsage(built);
+      const res = await callGemini(strategicInsightsPrompt(built.text));
       const arr = Array.isArray(res) ? res : (res?.insights ?? []);
       if (arr.length) {
         await addInsights(arr.map((i: any) => ({
@@ -86,7 +106,8 @@ export function StrategicScreen() {
       <div className="flex justify-between items-start mb-6">
         <div>
            <h2 className="text-xl font-medium mb-1">Analyst</h2>
-           <p className="text-sm text-[var(--text-secondary)] font-mono">Patterns and recommendations from your operating data</p>
+           <p className="text-sm text-[var(--text-secondary)] font-mono mb-1.5">Patterns and recommendations from your operating data</p>
+           <AiDisclaimer />
         </div>
         <div className="flex space-x-3 items-center">
           <button onClick={regenerateInsights} disabled={regenerating} className="h-8 px-3 text-xs rounded bg-[var(--bg-tertiary)] border border-[var(--border-default)] hover:bg-[var(--bg-elevated)] disabled:opacity-50">
@@ -118,7 +139,7 @@ export function StrategicScreen() {
            visibleInsights={visibleInsights}
            onDismissInsight={(id: string) => setDismissedInsights(prev => new Set(prev).add(id))}
          />
-         <ContextPanel activeTab={activeTab} hasInteracted={hasInteracted} />
+         <ContextPanel activeTab={activeTab} hasInteracted={hasInteracted} contextUsage={lastContextUsage} />
       </div>
     </div>
   );

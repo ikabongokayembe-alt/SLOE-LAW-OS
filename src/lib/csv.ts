@@ -49,3 +49,35 @@ export function csvToObjects(text: string): Record<string, string>[] {
     return obj;
   });
 }
+
+// Writer side — the exact inverse of the parser above: quote a field only
+// when it actually needs it (contains a comma, quote, or newline), and
+// double up any embedded quotes. No export capability existed anywhere
+// in this app before Billing Phase 1; this lives here rather than in a
+// new file since it's the natural counterpart to the parser already above.
+function csvEscape(field: string): string {
+  if (/[",\r\n]/.test(field)) {
+    return `"${field.replace(/"/g, '""')}"`;
+  }
+  return field;
+}
+
+export function toCsv(headers: string[], rows: (string | number)[][]): string {
+  const lines = [headers.map(h => csvEscape(String(h))).join(',')];
+  for (const row of rows) lines.push(row.map(v => csvEscape(String(v))).join(','));
+  return lines.join('\r\n');
+}
+
+// Triggers a real browser download of the given CSV text — no server
+// round-trip, the export never leaves the browser.
+export function downloadCsv(filename: string, csvText: string): void {
+  const blob = new Blob([csvText], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
