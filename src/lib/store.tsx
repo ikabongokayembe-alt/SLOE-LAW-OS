@@ -4,7 +4,7 @@ import { useAuth } from './auth';
 import { useToast } from './toast';
 import { attorneys as mockAttorneys } from '../data/attorneys';
 import { deadlineRules as mockDeadlineRules } from '../data/deadlineRules';
-import { Attorney, PracticeArea, MatterStage, Party, ConflictCheck, Matter, Deadline, Insight, LawDocument, Firm, DeadlineRule, ImportBatch, TimeEntry, MatterCommunication, AuditLogEntry, ClientInvite, ClientUser } from '../types';
+import { Attorney, PracticeArea, MatterStage, Party, ConflictCheck, Matter, Deadline, Insight, LawDocument, Firm, DeadlineRule, ImportBatch, TimeEntry, MatterCommunication, AuditLogEntry, ClientInvite, ClientUser, SignatureRequest } from '../types';
 
 interface StoreState {
   loading: boolean;
@@ -20,6 +20,7 @@ interface StoreState {
   deadlines: Deadline[];
   insights: Insight[];
   documents: LawDocument[];
+  signatureRequests: SignatureRequest[];
   agentRequests: { id: string; agent_key: string; status: string }[];
   deadlineRules: DeadlineRule[];
   importBatches: ImportBatch[];
@@ -73,6 +74,9 @@ interface StoreActions {
   sendMatterCommunication: (input: { matter_id: string; sent_to: string; subject: string; body: string }) => Promise<{ error?: string }>;
   inviteClientToPortal: (partyId: string, email: string) => Promise<{ invite?: ClientInvite; error?: string }>;
   setDocumentClientVisible: (documentId: string, visible: boolean) => Promise<void>;
+  sendForSignature: (documentId: string, recipientEmail: string, recipientName?: string) => Promise<{ error?: string }>;
+  refreshSignatureStatus: (signatureRequestId: string) => Promise<{ error?: string }>;
+  cancelSignatureRequest: (signatureRequestId: string) => Promise<{ error?: string }>;
 }
 
 const StoreContext = createContext<(StoreState & StoreActions) | null>(null);
@@ -117,6 +121,7 @@ function loadMockData(): Omit<StoreState, 'loading' | 'error' | 'hasLoadedOnce'>
     deadlines: [],
     insights: [],
     documents: [],
+    signatureRequests: [],
     agentRequests: [],
     deadlineRules: mockDeadlineRules,
     importBatches: [],
@@ -130,7 +135,7 @@ function loadMockData(): Omit<StoreState, 'loading' | 'error' | 'hasLoadedOnce'>
 }
 
 async function loadAll(firmId: string): Promise<Omit<StoreState, 'loading' | 'error' | 'hasLoadedOnce' | 'integrationConnections'>> {
-  const [firmR, attorneysR, practiceAreasR, matterStagesR, partiesR, conflictChecksR, mattersR, deadlinesR, insightsR, documentsR, agentRequestsR, deadlineRulesR, importBatchesR, timeEntriesR, communicationsR, auditLogR, clientInvitesR, clientUsersR] = await Promise.all([
+  const [firmR, attorneysR, practiceAreasR, matterStagesR, partiesR, conflictChecksR, mattersR, deadlinesR, insightsR, documentsR, agentRequestsR, deadlineRulesR, importBatchesR, timeEntriesR, communicationsR, auditLogR, clientInvitesR, clientUsersR, signatureRequestsR] = await Promise.all([
     supabase.from('firms').select('id,name,country,region,currency,locale').eq('id', firmId).single(),
     supabase.from('attorneys').select('*').eq('firm_id', firmId).order('name'),
     supabase.from('practice_areas').select('*').eq('firm_id', firmId),
@@ -166,6 +171,12 @@ async function loadAll(firmId: string): Promise<Omit<StoreState, 'loading' | 'er
     // filter needed here, "client_users select staff" RLS already scopes
     // this to the caller's own firm via a parties subquery.
     supabase.from('client_users').select('party_id'),
+    // E-signature via Dropbox Sign (see migration 0020) — same graceful
+    // degrade as documents/time_entries/client_invites. This one matters
+    // more than most: the frontend ships ahead of the migration being
+    // applied, so until 0020 lands this must come back empty rather than
+    // erroring the whole dashboard load.
+    supabase.from('signature_requests').select('*').eq('firm_id', firmId).order('created_at', { ascending: false }),
   ]);
 
   const firm = firmR.error ? null : (firmR.data as Firm ?? null); // degrade gracefully if not yet migrated / row missing
@@ -189,6 +200,7 @@ async function loadAll(firmId: string): Promise<Omit<StoreState, 'loading' | 'er
   const auditLogRaw = auditLogR.error ? [] : (auditLogR.data ?? []);
   const clientInvitesRaw = clientInvitesR.error ? [] : (clientInvitesR.data ?? []);
   const clientUsersRaw = clientUsersR.error ? [] : (clientUsersR.data ?? []);
+  const signatureRequestsRaw = signatureRequestsR.error ? [] : (signatureRequestsR.data ?? []);
 
   return {
     firm,
@@ -201,6 +213,7 @@ async function loadAll(firmId: string): Promise<Omit<StoreState, 'loading' | 'er
     deadlines: deadlines as Deadline[],
     insights: insightsRaw as Insight[],
     documents: documentsRaw as LawDocument[],
+    signatureRequests: signatureRequestsRaw as SignatureRequest[],
     agentRequests: agentRequests.map((r: any) => ({ id: r.id, agent_key: r.agent_key, status: r.status })),
     deadlineRules: deadlineRulesRaw as DeadlineRule[],
     importBatches: importBatchesRaw as ImportBatch[],
@@ -219,7 +232,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const [state, setState] = useState<StoreState>({
     loading: true, error: null, hasLoadedOnce: false,
-    firm: null, attorneys: [], practiceAreas: [], matterStages: [], parties: [], conflictChecks: [], matters: [], deadlines: [], insights: [], documents: [], agentRequests: [], deadlineRules: [], importBatches: [], timeEntries: [], communications: [], auditLog: [], clientInvites: [], clientUsers: [], integrationConnections: null,
+    firm: null, attorneys: [], practiceAreas: [], matterStages: [], parties: [], conflictChecks: [], matters: [], deadlines: [], insights: [], documents: [], signatureRequests: [], agentRequests: [], deadlineRules: [], importBatches: [], timeEntries: [], communications: [], auditLog: [], clientInvites: [], clientUsers: [], integrationConnections: null,
   });
 
   const mattersRef = useRef(state.matters);
@@ -808,6 +821,65 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  // All three of these go through the dropbox-sign edge function rather
+  // than writing signature_requests directly: the vendor API key must
+  // never reach the browser, and the status transitions are only
+  // trustworthy if they come from the vendor via the service role (a
+  // client-side write of status='signed' would be forgeable).
+  const sendForSignature = useCallback(async (documentId: string, recipientEmail: string, recipientName?: string) => {
+    if (!isSupabaseConfigured) {
+      showToast('error', 'E-signature needs a real backend — not available in local dev-data mode.');
+      return { error: 'dev mode' };
+    }
+    const { data, error } = await supabase.functions.invoke('dropbox-sign', {
+      body: { action: 'send', document_id: documentId, recipient_email: recipientEmail, recipient_name: recipientName },
+    });
+    const msg = error ? (data?.error ?? error.message) : data?.error;
+    if (msg) {
+      console.error('[store] sendForSignature failed:', msg);
+      showToast('error', `Couldn't send for signature: ${msg}`);
+      return { error: String(msg) };
+    }
+    // Re-read rather than optimistically constructing the row locally —
+    // the function fills in fields (vendor id, created_at) the client
+    // doesn't know, and getting them wrong would show a row that doesn't
+    // match what's actually stored.
+    const { data: rows } = await supabase.from('signature_requests').select('*').eq('document_id', documentId).order('created_at', { ascending: false });
+    if (rows) setState(s => ({ ...s, signatureRequests: [...(rows as SignatureRequest[]), ...s.signatureRequests.filter(r => r.document_id !== documentId)] }));
+    showToast('success', `Sent to ${recipientEmail} for signature.`);
+    return {};
+  }, []);
+
+  const refreshSignatureStatus = useCallback(async (signatureRequestId: string) => {
+    if (!isSupabaseConfigured) return { error: 'dev mode' };
+    const { data, error } = await supabase.functions.invoke('dropbox-sign', { body: { action: 'status', id: signatureRequestId } });
+    const msg = error ? (data?.error ?? error.message) : data?.error;
+    if (msg) {
+      console.error('[store] refreshSignatureStatus failed:', msg);
+      showToast('error', `Couldn't check signature status: ${msg}`);
+      return { error: String(msg) };
+    }
+    // A completed signature creates a new documents row (the signed
+    // version), so documents have to be re-read too, not just the request.
+    await refresh();
+    return {};
+  }, []);
+
+  const cancelSignatureRequest = useCallback(async (signatureRequestId: string) => {
+    if (!isSupabaseConfigured) return { error: 'dev mode' };
+    const prev = signatureRequestId;
+    const { data, error } = await supabase.functions.invoke('dropbox-sign', { body: { action: 'cancel', id: signatureRequestId } });
+    const msg = error ? (data?.error ?? error.message) : data?.error;
+    if (msg) {
+      console.error('[store] cancelSignatureRequest failed:', msg);
+      showToast('error', `Couldn't cancel that signature request: ${msg}`);
+      return { error: String(msg) };
+    }
+    setState(s => ({ ...s, signatureRequests: s.signatureRequests.filter(r => r.id !== prev) }));
+    showToast('success', 'Signature request cancelled.');
+    return {};
+  }, []);
+
   if (!state.hasLoadedOnce) {
     return (
       <div className="fixed inset-0 bg-[var(--bg-primary,#0a0a0a)] flex flex-col items-center justify-center text-[var(--text-primary,#f5f5f5)]">
@@ -832,7 +904,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   return (
     <StoreContext.Provider value={{
       ...state,
-      refresh, updateFirm, addPracticeArea, updatePracticeArea, addParty, runConflictCheck, clearConflictCheck, addMatter, updateMatterStage, updateMatterAttorney, linkMatterConflictCheck, addDeadline, updateDeadline, addInsights, uploadDocument, deleteDocument, requestAgent, removeAgentRequest, commitImportBatch, removeImportBatch, addTimeEntry, updateTimeEntry, deleteTimeEntry, refreshIntegrations, pushDeadlineToCalendar, sendMatterCommunication, inviteClientToPortal, setDocumentClientVisible,
+      refresh, updateFirm, addPracticeArea, updatePracticeArea, addParty, runConflictCheck, clearConflictCheck, addMatter, updateMatterStage, updateMatterAttorney, linkMatterConflictCheck, addDeadline, updateDeadline, addInsights, uploadDocument, deleteDocument, requestAgent, removeAgentRequest, commitImportBatch, removeImportBatch, addTimeEntry, updateTimeEntry, deleteTimeEntry, refreshIntegrations, pushDeadlineToCalendar, sendMatterCommunication, inviteClientToPortal, setDocumentClientVisible, sendForSignature, refreshSignatureStatus, cancelSignatureRequest,
     }}>
       {children}
     </StoreContext.Provider>

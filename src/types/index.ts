@@ -242,6 +242,28 @@ export interface LawDocument {
 // Postgres function (migration 0017), not the documents table directly,
 // so it carries a ready-to-render snippet instead of the full
 // extracted_text.
+// One attempt at getting a document signed via Dropbox Sign (migration
+// 0020). Deliberately a separate record per attempt rather than a column
+// on LawDocument: the same document can be sent more than once (declined,
+// then re-sent to a corrected address) and the history of that matters.
+export interface SignatureRequest {
+  id: string;
+  firm_id: string;
+  matter_id: string | null;
+  document_id: string;
+  // The documents row holding the signed copy, itself a version of the
+  // original via parent_document_id. Null until it comes back signed.
+  signed_document_id?: string | null;
+  recipient_email: string;
+  status: 'sent' | 'signed' | 'declined';
+  // Null between inserting the row and the vendor call returning — see
+  // the edge function's comment on why the row is written first.
+  dropbox_sign_request_id?: string | null;
+  created_by?: string | null;
+  created_at: string;
+  completed_at?: string | null;
+}
+
 export interface DocumentSearchResult {
   id: string;
   file_name: string;

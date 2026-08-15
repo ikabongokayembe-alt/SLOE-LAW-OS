@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../../lib/store';
 import { useAuth } from '../../lib/auth';
 import { supabase } from '../../lib/supabase';
-import { FileText, Upload, Trash2, Download, History, Search, X, Eye, EyeOff } from 'lucide-react';
-import { LawDocument, DocumentSearchResult } from '../../types';
+import { FileText, Upload, Trash2, Download, History, Search, X, Eye, EyeOff, PenLine, RefreshCw } from 'lucide-react';
+import { LawDocument, DocumentSearchResult, SignatureRequest } from '../../types';
 
 // search_documents' snippet uses plain-text §§B§§/§§E§§ markers, not
 // HTML tags (see migration 0017's comment on why: extracted_text is
@@ -41,7 +41,7 @@ interface DocGroup {
 }
 
 export function DocumentsScreen() {
-  const { documents, matters, uploadDocument, deleteDocument, setDocumentClientVisible, firm } = useStore();
+  const { documents, matters, uploadDocument, deleteDocument, setDocumentClientVisible, signatureRequests, sendForSignature, refreshSignatureStatus, firm } = useStore();
   const locale = firm?.locale || 'en-US';
   const { isDevMode } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -57,6 +57,11 @@ export function DocumentsScreen() {
   // a query. A non-empty query switches the whole screen into "search
   // results" mode instead of the normal matter-filtered/grouped view —
   // the two don't compose (searching already spans all matters).
+  const [signTarget, setSignTarget] = useState<LawDocument | null>(null);
+  const [signEmail, setSignEmail] = useState('');
+  const [signName, setSignName] = useState('');
+  const [signSending, setSignSending] = useState(false);
+  const [refreshingSig, setRefreshingSig] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<DocumentSearchResult[] | null>(null);
   const [searching, setSearching] = useState(false);
@@ -136,6 +141,33 @@ export function DocumentsScreen() {
     }
   };
 
+  // Latest attempt wins for display purposes. signature_requests is
+  // ordered created_at desc by the store, so the first match is newest —
+  // a document declined once and re-sent should read as "awaiting", not
+  // stay stuck on the older declined attempt.
+  const latestSignature = (documentId: string): SignatureRequest | undefined =>
+    signatureRequests.find(r => r.document_id === documentId);
+
+  const SIGNATURE_LABEL: Record<SignatureRequest['status'], { text: string; color: string }> = {
+    sent:     { text: 'Awaiting signature', color: 'var(--signal-warning)' },
+    signed:   { text: 'Signed',             color: 'var(--signal-positive)' },
+    declined: { text: 'Declined',           color: 'var(--signal-negative)' },
+  };
+
+  const handleRefreshSignature = async (id: string) => {
+    setRefreshingSig(id);
+    await refreshSignatureStatus(id);
+    setRefreshingSig(null);
+  };
+
+  const handleSendForSignature = async () => {
+    if (!signTarget || !signEmail.trim()) return;
+    setSignSending(true);
+    const res = await sendForSignature(signTarget.id, signEmail.trim(), signName.trim() || undefined);
+    setSignSending(false);
+    if (!res.error) { setSignTarget(null); setSignEmail(''); setSignName(''); }
+  };
+
   const renderRow = (d: LawDocument, isSecondary: boolean) => (
     <div key={d.id} className={`flex items-center gap-3 ${isSecondary ? 'py-2 pl-8 pr-3 opacity-60' : 'p-3'}`}>
       <div className={`rounded-lg bg-[var(--bg-tertiary)] flex items-center justify-center shrink-0 ${isSecondary ? 'w-7 h-7' : 'w-9 h-9'}`}>
@@ -148,6 +180,12 @@ export function DocumentsScreen() {
           {d.extraction_status === 'pending' && <> · Indexing…</>}
           {d.extraction_status === 'failed' && <> · <span className="text-[var(--signal-warning)]">Not indexed</span></>}
           {d.client_visible && <> · <span className="text-[var(--signal-positive)]">Shared with client</span></>}
+          {(() => {
+            const sig = latestSignature(d.id);
+            if (!sig) return null;
+            const l = SIGNATURE_LABEL[sig.status];
+            return <> · <span style={{ color: l.color }}>{l.text}</span></>;
+          })()}
         </div>
       </div>
       {d.matter_id && (
@@ -159,6 +197,34 @@ export function DocumentsScreen() {
           {d.client_visible ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
         </button>
       )}
+      {d.matter_id && (() => {
+        const sig = latestSignature(d.id);
+        // Awaiting: offer a status check instead of a second send —
+        // sending the same document twice while one request is still open
+        // is almost never what someone means to do, and Dropbox Sign
+        // would happily create a duplicate request if asked.
+        if (sig && sig.status === 'sent') {
+          return (
+            <button
+              onClick={() => handleRefreshSignature(sig.id)}
+              disabled={refreshingSig === sig.id}
+              title={`Out for signature with ${sig.recipient_email} — click to check status`}
+              className="w-8 h-8 flex items-center justify-center text-[var(--signal-warning)] hover:text-[var(--text-primary)] transition-colors disabled:opacity-40"
+            >
+              <RefreshCw className={`w-4 h-4 ${refreshingSig === sig.id ? 'animate-spin' : ''}`} />
+            </button>
+          );
+        }
+        return (
+          <button
+            onClick={() => { setSignTarget(d); setSignEmail(''); setSignName(''); }}
+            title={sig?.status === 'signed' ? 'Already signed — send again for a new signature' : 'Send this document for e-signature'}
+            className="w-8 h-8 flex items-center justify-center text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors"
+          >
+            <PenLine className="w-4 h-4" />
+          </button>
+        );
+      })()}
       <button onClick={() => handleDownload(d.storage_path, d.file_name)} className="w-8 h-8 flex items-center justify-center text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors">
         <Download className="w-4 h-4" />
       </button>
@@ -191,6 +257,50 @@ export function DocumentsScreen() {
         </button>
         <input ref={fileInputRef} type="file" onChange={handleFileSelected} className="hidden" />
       </div>
+
+      {signTarget && (
+        <div className="flex items-start gap-3 bg-[var(--bg-secondary)] border border-[var(--accent-secondary)]/40 rounded-lg p-4 mb-6">
+          <PenLine className="w-4 h-4 text-[var(--accent-secondary)] shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-medium mb-1">Send "{signTarget.file_name}" for signature</div>
+            <p className="text-xs text-[var(--text-secondary)] mb-3">
+              The recipient gets an email from Dropbox Sign. When they sign, the executed copy is
+              filed here as a new version of this document — the original is never replaced.
+            </p>
+            <div className="flex flex-col sm:flex-row gap-2 mb-3">
+              <input
+                type="email"
+                value={signEmail}
+                onChange={e => setSignEmail(e.target.value)}
+                placeholder="Recipient email"
+                className="h-9 px-3 bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded text-sm focus:outline-none flex-1 min-w-0"
+              />
+              <input
+                type="text"
+                value={signName}
+                onChange={e => setSignName(e.target.value)}
+                placeholder="Recipient name (optional)"
+                className="h-9 px-3 bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded text-sm focus:outline-none flex-1 min-w-0"
+              />
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={handleSendForSignature}
+                disabled={signSending || !signEmail.trim()}
+                className="h-8 px-3 text-xs font-medium bg-[var(--text-primary)] text-[var(--bg-primary)] rounded hover:opacity-90 transition-opacity disabled:opacity-40"
+              >
+                {signSending ? 'Sending…' : 'Send for signature'}
+              </button>
+              <button
+                onClick={() => setSignTarget(null)}
+                className="h-8 px-3 text-xs text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {pendingUpload && (
         <div className="flex items-start gap-3 bg-[var(--bg-secondary)] border border-[var(--accent-secondary)]/40 rounded-lg p-4 mb-6">
