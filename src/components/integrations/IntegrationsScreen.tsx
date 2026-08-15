@@ -183,12 +183,51 @@ function ComingSoonCard({ icon: Icon, name, description }: { icon: any; name: st
 // Real, working connectors via Composio — verified end-to-end against the
 // live Composio API before this was built. Connecting opens a genuine
 // hosted OAuth flow; disconnecting genuinely revokes it.
+// `wired` is the honest distinction this screen was missing. EVERY slug
+// here can complete a real Composio OAuth flow — none is a fake card. But
+// only Gmail and Google Calendar are actually CONSUMED by Law OS
+// (sendMatterCommunication and pushDeadlineToCalendar). Connecting Slack
+// or WhatsApp previously looked identical to connecting Gmail and then
+// did nothing, which is the misleading state the grouping below fixes:
+// a working connection to a tool nothing reads from is worse than no
+// button at all, because the user reasonably assumes it took effect.
+//
+// Descriptions were also carrying real-estate copy from a sibling product
+// ("viewings and appointments", "urgent leads") — rewritten for legal work.
+type Connector = { slug: string; name: string; description: string; wired: boolean };
+
+const CONNECTOR_GROUPS: { group: string; blurb: string; items: Connector[] }[] = [
+  {
+    group: 'Email',
+    blurb: 'Send client correspondence from your own address and file replies against the matter.',
+    items: [
+      { slug: 'gmail', name: 'Gmail', description: 'Send client updates and file replies against a matter', wired: true },
+      { slug: 'outlook', name: 'Outlook', description: 'Microsoft-based inboxes', wired: false },
+    ],
+  },
+  {
+    group: 'Calendar',
+    blurb: 'Push court dates and filing deadlines to the calendar you already live in.',
+    items: [
+      { slug: 'googlecalendar', name: 'Google Calendar', description: 'Push hearings and filing deadlines to your calendar', wired: true },
+    ],
+  },
+  {
+    group: 'Team messaging',
+    blurb: 'Connectable today, but nothing in Law OS reads from these yet.',
+    items: [
+      { slug: 'slack', name: 'Slack', description: 'Post deadline and conflict alerts to a channel', wired: false },
+      { slug: 'whatsapp', name: 'WhatsApp', description: 'Message clients from your connected number', wired: false },
+    ],
+  },
+];
+
 const FEATURED_CONNECTORS: { slug: string; name: string; description: string }[] = [
-  { slug: 'gmail', name: 'Gmail', description: 'Send follow-ups and read replies from your real inbox' },
-  { slug: 'googlecalendar', name: 'Google Calendar', description: 'Two-way sync for viewings and appointments' },
-  { slug: 'outlook', name: 'Outlook', description: 'Same as Gmail, for Microsoft-based inboxes' },
-  { slug: 'slack', name: 'Slack', description: 'Post urgent leads and updates to a team channel' },
-  { slug: 'whatsapp', name: 'WhatsApp', description: 'Send messages directly through your connected number' },
+  { slug: 'gmail', name: 'Gmail', description: 'Send client updates and file replies against a matter' },
+  { slug: 'googlecalendar', name: 'Google Calendar', description: 'Push hearings and filing deadlines to your calendar' },
+  { slug: 'outlook', name: 'Outlook', description: 'Microsoft-based inboxes' },
+  { slug: 'slack', name: 'Slack', description: 'Post deadline and conflict alerts to a channel' },
+  { slug: 'whatsapp', name: 'WhatsApp', description: 'Message clients from your connected number' },
 ];
 
 interface ConnectionStatus { toolkit_slug: string; status: string; connected_account_id: string; }
@@ -221,6 +260,41 @@ function ConnectorCard({ connector, connection, onChanged }: { connector: { slug
   const [busy, setBusy] = useState(false);
   const isConnected = connection?.status === 'ACTIVE';
   const isPending = connection && !isConnected;
+
+  // "Pending — click to retry" covered every non-ACTIVE Composio status
+  // with one vague label, so a user could not tell an abandoned sign-in
+  // (the common case: the OAuth tab was opened and never completed) from
+  // a revoked or expired grant, and had no idea whether retrying would
+  // help. Composio reports the state; this just stops throwing it away.
+  const pendingLabel = (() => {
+    switch ((connection?.status || '').toUpperCase()) {
+      case 'INITIATED':
+        return 'Sign-in unfinished — click to resume';
+      case 'EXPIRED':
+        return 'Access expired — reconnect';
+      case 'FAILED':
+      case 'ERROR':
+        return 'Connection failed — try again';
+      case 'INACTIVE':
+      case 'DISABLED':
+        return 'Disconnected at the provider — reconnect';
+      default:
+        return `Not connected (${connection?.status ?? 'unknown'}) — click to retry`;
+    }
+  })();
+
+  const pendingHint = (() => {
+    switch ((connection?.status || '').toUpperCase()) {
+      case 'INITIATED':
+        return 'You opened the sign-in but did not finish it. Nothing is connected yet.';
+      case 'EXPIRED':
+      case 'INACTIVE':
+      case 'DISABLED':
+        return 'Access was withdrawn at the provider. Reconnecting restores it.';
+      default:
+        return null;
+    }
+  })();
 
   const handleConnect = async () => {
     setBusy(true);
@@ -264,8 +338,11 @@ function ConnectorCard({ connector, connection, onChanged }: { connector: { slug
         </button>
       ) : (
         <button onClick={handleConnect} disabled={busy} className="mt-3 w-full h-8 text-xs font-medium bg-[var(--text-primary)] text-[var(--bg-primary)] rounded hover:opacity-90 transition-opacity disabled:opacity-40">
-          {busy ? 'Opening…' : isPending ? 'Pending — click to retry' : 'Connect'}
+          {busy ? 'Opening…' : isPending ? pendingLabel : 'Connect'}
         </button>
+      )}
+      {isPending && pendingHint && (
+        <p className="mt-2 text-[11px] leading-snug text-[var(--text-tertiary)]">{pendingHint}</p>
       )}
     </div>
   );
@@ -373,12 +450,43 @@ export function IntegrationsScreen() {
         </div>
       </div>
 
-      <div className="text-xs uppercase tracking-wider text-[var(--text-tertiary)] mb-3">Featured</div>
+      <div className="text-xs uppercase tracking-wider text-[var(--text-tertiary)] mb-3">Import</div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
         <CsvImportCard />
-        {FEATURED_CONNECTORS.map(c => (
-          <ConnectorCard key={c.slug} connector={c} connection={connectionFor(c.slug)} onChanged={loadStatus} />
-        ))}
+      </div>
+
+      {/* Grouped by the job the tool does, rather than one flat grid of
+          five logos with no ordering logic. Within each group, anything
+          Law OS does not yet read from is marked so a working OAuth
+          connection is never mistaken for a working feature. */}
+      {CONNECTOR_GROUPS.map(({ group, blurb, items }) => (
+        <div key={group} className="mb-8">
+          <div className="flex items-baseline justify-between mb-1">
+            <div className="text-xs uppercase tracking-wider text-[var(--text-tertiary)]">{group}</div>
+            {items.every(i => !i.wired) && (
+              <span className="text-[10px] uppercase tracking-wider text-[var(--text-tertiary)] border border-[var(--border-subtle)] rounded px-1.5 py-0.5">
+                Not yet used by Law OS
+              </span>
+            )}
+          </div>
+          <p className="text-xs text-[var(--text-secondary)] mb-3">{blurb}</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {items.map(c => (
+              <div key={c.slug} className={c.wired ? '' : 'opacity-70'}>
+                <ConnectorCard connector={c} connection={connectionFor(c.slug)} onChanged={loadStatus} />
+                {!c.wired && (
+                  <p className="mt-1.5 text-[11px] leading-snug text-[var(--text-tertiary)]">
+                    Connecting works, but nothing in Law OS reads from {c.name} yet.
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+
+      <div className="text-xs uppercase tracking-wider text-[var(--text-tertiary)] mb-3">Not built yet</div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
         <ComingSoonCard icon={Building2} name="Court E-Filing Systems" description="Jurisdiction-specific e-filing portals — not on Composio's catalog yet" />
       </div>
 

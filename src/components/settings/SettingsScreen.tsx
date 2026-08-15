@@ -152,9 +152,35 @@ export function SettingsScreen() {
                 role="switch"
                 aria-checked={pa.is_active}
                 title={pa.is_active ? 'Active — click to deactivate' : 'Inactive — click to activate'}
-                className={`shrink-0 h-6 w-11 rounded-full relative transition-colors disabled:opacity-40 ${pa.is_active ? 'bg-[var(--signal-positive)]' : 'bg-[var(--bg-tertiary)] border border-[var(--border-default)]'}`}
+                /* `border` is applied in BOTH states (coloured to match the
+                   track when on) rather than only when off. With the default
+                   border-box sizing, a border present in one state and absent
+                   in the other changes the padding box by 1px, so the track
+                   and knob shifted by a pixel as it flipped — the mismatch
+                   this fixes. The knob is centred with top-1/2 plus
+                   -translate-y-1/2 instead of a fixed top-0.5, which on a
+                   20px knob in a 22px inner track left 2px above and 0 below.
+                   18px of travel leaves an equal 2px inset at each end
+                   (44px track - 2px borders - 20px knob - 2px inset). */
+                className={`shrink-0 h-6 w-11 rounded-full relative transition-colors disabled:opacity-40 border ${pa.is_active ? 'bg-[var(--signal-positive)] border-[var(--signal-positive)]' : 'bg-[var(--bg-tertiary)] border-[var(--border-default)]'}`}
               >
-                <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-transform ${pa.is_active ? 'translate-x-[22px]' : 'translate-x-0.5'}`} />
+                <span
+                  /* Positioned with an inline style rather than Tailwind
+                     translate utilities. In Tailwind v4 those compile to the
+                     CSS `translate` property driven by inherited custom
+                     properties (--tw-translate-x), and the off-state reset
+                     did not take: a knob carrying `translate-x-0` still
+                     computed to `translate: 18px -50%`, i.e. identical to the
+                     on state, so the knob never moved and the only cue left
+                     was the track colour. Verified by reading computed
+                     styles, not by eye. An inline left offset can't be
+                     defeated by cascade or JIT generation.
+                     20px = 42px padding box - 20px knob - 2px inset, which
+                     mirrors the 2px inset of the off state exactly (measured:
+                     3px from each outer edge once the 1px border is counted). */
+                  style={{ left: pa.is_active ? 20 : 2, top: '50%', transform: 'translateY(-50%)' }}
+                  className="absolute w-5 h-5 rounded-full bg-white transition-[left] duration-200"
+                />
               </button>
             </div>
           ))}
