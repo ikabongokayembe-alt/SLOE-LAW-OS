@@ -176,7 +176,18 @@ jobs:
             exit 1
           fi
           gunzip -t "$FILE"
-          if ! zcat "$FILE" | head -n 20 | grep -q "PostgreSQL database dump"; then
+          # Read the header into a variable instead of testing a live
+          # pipeline. The obvious-looking form
+          #   zcat "$FILE" | head -n 20 | grep -q "PostgreSQL database dump"
+          # rejects every REAL dump: head exits after 20 lines, zcat is
+          # still writing and dies of SIGPIPE (141), and `set -o pipefail`
+          # promotes that to the pipeline's exit status — so the check
+          # reports a missing header on a file whose header is perfectly
+          # fine. It's size-dependent, which is why it hid for so long: on
+          # a small file zcat finishes before head leaves and it passes.
+          # Reproduced directly before changing it, not guessed at.
+          HEADER="$(gzip -cd < "$FILE" | head -n 20 || true)"
+          if ! printf '%s' "$HEADER" | grep -q "PostgreSQL database dump"; then
             echo "::error::File doesn't look like real pg_dump output (missing the expected header) — refusing to trust it."
             exit 1
           fi
