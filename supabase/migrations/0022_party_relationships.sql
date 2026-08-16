@@ -205,10 +205,14 @@ create policy "party_relationships delete" on party_relationships for delete usi
 --
 -- No extension is required by this migration.
 --
--- NOTE ON WHAT IS ALREADY POSSIBLE WITHOUT THIS TABLE: parties.aliases
--- exists and is unused by the current exact-match conflict search, and
--- a party appearing on more than one matter in opposing roles is
--- derivable today. Those are a real class of non-obvious conflict that
+-- NOTE ON WHAT IS ALREADY POSSIBLE WITHOUT THIS TABLE: matter_parties
+-- has existed since 0002 with a role_in_matter column and nothing ever
+-- queried it, so "the searched party is the OPPOSING party on another
+-- live matter" -- the exact scenario 0002's own comment describes -- was
+-- undetectable. That needs no new data.
+-- (An earlier draft of this note said parties.aliases was unused by the
+-- conflict search. That was wrong: store.tsx already matches aliases
+-- bidirectionally. Corrected here rather than left to mislead.) Those are a real class of non-obvious conflict that
 -- needs no new data — worth building alongside the relationship walk so
 -- the feature is useful before anyone has recorded a single edge.
 -- ─────────────────────────────────────────────────────────────────────

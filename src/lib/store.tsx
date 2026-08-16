@@ -4,7 +4,7 @@ import { useAuth } from './auth';
 import { useToast } from './toast';
 import { attorneys as mockAttorneys } from '../data/attorneys';
 import { deadlineRules as mockDeadlineRules } from '../data/deadlineRules';
-import { Attorney, PracticeArea, MatterStage, Party, ConflictCheck, Matter, Deadline, Insight, LawDocument, Firm, DeadlineRule, ImportBatch, TimeEntry, MatterCommunication, AuditLogEntry, ClientInvite, ClientUser, SignatureRequest } from '../types';
+import { Attorney, PracticeArea, MatterStage, Party, ConflictCheck, Matter, Deadline, Insight, LawDocument, Firm, DeadlineRule, ImportBatch, TimeEntry, MatterCommunication, AuditLogEntry, ClientInvite, ClientUser, SignatureRequest, MatterParty, PartyRelationship } from '../types';
 
 interface StoreState {
   loading: boolean;
@@ -21,6 +21,8 @@ interface StoreState {
   insights: Insight[];
   documents: LawDocument[];
   signatureRequests: SignatureRequest[];
+  matterParties: MatterParty[];
+  partyRelationships: PartyRelationship[];
   agentRequests: { id: string; agent_key: string; status: string }[];
   deadlineRules: DeadlineRule[];
   importBatches: ImportBatch[];
@@ -122,6 +124,8 @@ function loadMockData(): Omit<StoreState, 'loading' | 'error' | 'hasLoadedOnce'>
     insights: [],
     documents: [],
     signatureRequests: [],
+    matterParties: [],
+    partyRelationships: [],
     agentRequests: [],
     deadlineRules: mockDeadlineRules,
     importBatches: [],
@@ -135,7 +139,7 @@ function loadMockData(): Omit<StoreState, 'loading' | 'error' | 'hasLoadedOnce'>
 }
 
 async function loadAll(firmId: string): Promise<Omit<StoreState, 'loading' | 'error' | 'hasLoadedOnce' | 'integrationConnections'>> {
-  const [firmR, attorneysR, practiceAreasR, matterStagesR, partiesR, conflictChecksR, mattersR, deadlinesR, insightsR, documentsR, agentRequestsR, deadlineRulesR, importBatchesR, timeEntriesR, communicationsR, auditLogR, clientInvitesR, clientUsersR, signatureRequestsR] = await Promise.all([
+  const [firmR, attorneysR, practiceAreasR, matterStagesR, partiesR, conflictChecksR, mattersR, deadlinesR, insightsR, documentsR, agentRequestsR, deadlineRulesR, importBatchesR, timeEntriesR, communicationsR, auditLogR, clientInvitesR, clientUsersR, signatureRequestsR, matterPartiesR, partyRelationshipsR] = await Promise.all([
     supabase.from('firms').select('id,name,country,region,currency,locale').eq('id', firmId).single(),
     supabase.from('attorneys').select('*').eq('firm_id', firmId).order('name'),
     supabase.from('practice_areas').select('*').eq('firm_id', firmId),
@@ -177,6 +181,11 @@ async function loadAll(firmId: string): Promise<Omit<StoreState, 'loading' | 'er
     // applied, so until 0020 lands this must come back empty rather than
     // erroring the whole dashboard load.
     supabase.from('signature_requests').select('*').eq('firm_id', firmId).order('created_at', { ascending: false }),
+    // Conflict screening inputs. matter_parties has existed since 0002
+    // but was never loaded, so role-based conflicts were undetectable.
+    // party_relationships is 0022. Both degrade to empty if unmigrated.
+    supabase.from('matter_parties').select('*'),
+    supabase.from('party_relationships').select('*').eq('firm_id', firmId),
   ]);
 
   const firm = firmR.error ? null : (firmR.data as Firm ?? null); // degrade gracefully if not yet migrated / row missing
@@ -201,6 +210,8 @@ async function loadAll(firmId: string): Promise<Omit<StoreState, 'loading' | 'er
   const clientInvitesRaw = clientInvitesR.error ? [] : (clientInvitesR.data ?? []);
   const clientUsersRaw = clientUsersR.error ? [] : (clientUsersR.data ?? []);
   const signatureRequestsRaw = signatureRequestsR.error ? [] : (signatureRequestsR.data ?? []);
+  const matterPartiesRaw = matterPartiesR.error ? [] : (matterPartiesR.data ?? []);
+  const partyRelationshipsRaw = partyRelationshipsR.error ? [] : (partyRelationshipsR.data ?? []);
 
   return {
     firm,
@@ -214,6 +225,8 @@ async function loadAll(firmId: string): Promise<Omit<StoreState, 'loading' | 'er
     insights: insightsRaw as Insight[],
     documents: documentsRaw as LawDocument[],
     signatureRequests: signatureRequestsRaw as SignatureRequest[],
+    matterParties: matterPartiesRaw as MatterParty[],
+    partyRelationships: partyRelationshipsRaw as PartyRelationship[],
     agentRequests: agentRequests.map((r: any) => ({ id: r.id, agent_key: r.agent_key, status: r.status })),
     deadlineRules: deadlineRulesRaw as DeadlineRule[],
     importBatches: importBatchesRaw as ImportBatch[],
@@ -232,7 +245,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const [state, setState] = useState<StoreState>({
     loading: true, error: null, hasLoadedOnce: false,
-    firm: null, attorneys: [], practiceAreas: [], matterStages: [], parties: [], conflictChecks: [], matters: [], deadlines: [], insights: [], documents: [], signatureRequests: [], agentRequests: [], deadlineRules: [], importBatches: [], timeEntries: [], communications: [], auditLog: [], clientInvites: [], clientUsers: [], integrationConnections: null,
+    firm: null, attorneys: [], practiceAreas: [], matterStages: [], parties: [], conflictChecks: [], matters: [], deadlines: [], insights: [], documents: [], signatureRequests: [], matterParties: [], partyRelationships: [], agentRequests: [], deadlineRules: [], importBatches: [], timeEntries: [], communications: [], auditLog: [], clientInvites: [], clientUsers: [], integrationConnections: null,
   });
 
   const mattersRef = useRef(state.matters);

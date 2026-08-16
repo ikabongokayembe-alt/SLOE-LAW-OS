@@ -43,6 +43,29 @@ export interface Party {
   import_batch_id?: string | null;
 }
 
+// A party's role on a matter beyond the primary client (migration 0002).
+// This is what makes "your prospective client is the opposing party on
+// another live matter" detectable — the classic conflict the schema
+// comment describes but which nothing has ever queried until now.
+export interface MatterParty {
+  matter_id: string;
+  party_id: string;
+  role_in_matter: 'client' | 'opposing' | 'witness' | 'co_counsel' | 'other';
+}
+
+// Directed edge: <party_id> is the <relationship> of <related_party_id>
+// (migration 0022). A row is a RELATIONSHIP, never a conflict.
+export interface PartyRelationship {
+  id: string;
+  firm_id: string;
+  party_id: string;
+  related_party_id: string;
+  relationship: string;
+  notes?: string | null;
+  created_by?: string | null;
+  created_at: string;
+}
+
 export type ConflictCheckStatus = 'pending' | 'cleared' | 'flagged' | 'waived';
 
 export interface ConflictCheck {
