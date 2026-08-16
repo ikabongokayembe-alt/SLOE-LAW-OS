@@ -34,6 +34,7 @@
 //          supabase secrets set SENTRY_DSN=...  (error monitoring — see _shared/sentry.ts; optional, no-ops if unset)
 
 import { reportError } from '../_shared/sentry.ts';
+import { classifyTool, buildOfferedTools } from '../_shared/composioTools.ts';
 
 // @ts-ignore Deno global is available in the Supabase Edge Function runtime
 const COMPOSIO_API_KEY = Deno.env.get('COMPOSIO_API_KEY');
@@ -89,6 +90,26 @@ async function getActiveConnectedAccountId(composioUserId: string, toolkitSlug: 
   return match?.id ?? null;
 }
 
+// Every ACTIVE connection for this firm, as {slug, id}. Shares the
+// status action's hard-won lesson: Composio returns every attempt ever
+// made, so filtering to ACTIVE is required, not optional.
+async function getActiveConnections(composioUserId: string): Promise<{ slug: string; id: string }[]> {
+  const res = await fetch(
+    `${COMPOSIO_BASE}/connected_accounts?user_ids=${encodeURIComponent(composioUserId)}`,
+    { headers: { 'x-api-key': COMPOSIO_API_KEY! } }
+  );
+  const data = await res.json();
+  const out: { slug: string; id: string }[] = [];
+  const seen = new Set<string>();
+  for (const c of (data.items || [])) {
+    const slug = c?.toolkit?.slug;
+    if (!slug || c.status !== 'ACTIVE' || seen.has(slug)) continue;
+    seen.add(slug);
+    out.push({ slug, id: c.id });
+  }
+  return out;
+}
+
 // Reuses a cached auth_config_id for a toolkit if one already exists;
 // otherwise creates it once via Composio and caches it, so repeat connects
 // (by any brokerage, for the same toolkit) don't create duplicate configs.
@@ -136,6 +157,7 @@ Deno.serve(async (req: Request) => {
 
     const {
       action, toolkit_slug, connected_account_id, query, callback_origin,
+      tool_slug, tool_arguments,
       title, due_date, matter_title,
       matter_id, sent_to, subject, body: emailBody,
     } = await req.json();
@@ -232,6 +254,79 @@ Deno.serve(async (req: Request) => {
         toolkit_slug: c.toolkit?.slug, status: c.status, connected_account_id: c.id,
       }));
       return json({ connections });
+    }
+
+    // Returns the READ-ONLY tools available on this firm's own ACTIVE
+    // connections, already sanitised into Gemini-safe declarations. See
+    // _shared/composioTools.ts for the boundary and why it is read-only.
+    // Nothing here grants permission — execute_tool re-checks
+    // independently, because the model can name a tool it was never
+    // offered.
+    if (action === 'list_tools') {
+      const active = await getActiveConnections(composioUserId);
+      if (active.length === 0) return json({ tools: [], connected_toolkits: [] });
+
+      const rawByToolkit: Record<string, any[]> = {};
+      for (const conn of active) {
+        const res = await fetch(
+          `${COMPOSIO_BASE}/tools?toolkit_slug=${encodeURIComponent(conn.slug)}&limit=100`,
+          { headers: { 'x-api-key': COMPOSIO_API_KEY } }
+        );
+        const data = await res.json();
+        rawByToolkit[conn.slug] = data?.items ?? [];
+      }
+      return json({
+        tools: buildOfferedTools(rawByToolkit),
+        connected_toolkits: active.map(a => a.slug),
+      });
+    }
+
+    // Executes ONE discovered tool. Every guard that matters lives here,
+    // not at discovery:
+    //   * the tool must classify as a read, re-checked server-side;
+    //   * the toolkit is derived from the firm's own ACTIVE connections,
+    //     never taken from the request;
+    //   * connected_account_id is resolved server-side and a
+    //     client-supplied one is ignored entirely, so a compromised
+    //     session cannot point this at another firm's connection.
+    if (action === 'execute_tool') {
+      if (!tool_slug) return json({ error: 'tool_slug is required' }, 400);
+
+      if (classifyTool(tool_slug) !== 'read') {
+        // Deliberately explicit: a refusal the model can read and explain
+        // to the user, rather than a silent empty result it might then
+        // invent an answer around.
+        return json({
+          error: 'This tool is not available to the assistant. Only read-only tools can be run this way; sending, creating, modifying or deleting must go through a reviewed action in the app.',
+          refused: true,
+        }, 403);
+      }
+
+      const active = await getActiveConnections(composioUserId);
+      // Match the tool to a connected toolkit by prefix, longest first so
+      // a toolkit whose slug is a prefix of another cannot capture it.
+      const owner = active
+        .slice()
+        .sort((a, b) => b.slug.length - a.slug.length)
+        .find(c => tool_slug.toLowerCase().startsWith(c.slug.toLowerCase()));
+      if (!owner) {
+        return json({ error: 'That tool belongs to an app this firm has not connected.', refused: true }, 400);
+      }
+
+      const execRes = await fetch(`${COMPOSIO_BASE}/tools/execute/${encodeURIComponent(tool_slug)}`, {
+        method: 'POST',
+        headers: { 'x-api-key': COMPOSIO_API_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: composioUserId,
+          connected_account_id: owner.id,
+          arguments: tool_arguments && typeof tool_arguments === 'object' ? tool_arguments : {},
+        }),
+      });
+      const exec = await execRes.json();
+      if (!exec?.successful) {
+        return json({ error: exec?.error || 'The tool call did not succeed.' }, 400);
+      }
+      return json({ ok: true, data: exec?.data ?? null });
     }
 
     if (action === 'disconnect') {
