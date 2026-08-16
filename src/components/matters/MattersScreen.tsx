@@ -1,11 +1,13 @@
 import { useMemo, useState } from 'react';
 import { useStore } from '../../lib/store';
+import { findBottlenecks } from '../../lib/riskSignals';
+import { useMemo as useMemoRS } from 'react';
 import { NewMatterModal } from './NewMatterModal';
 import { InviteClientModal } from './InviteClientModal';
 import { AlertTriangle, Plus, ShieldCheck, UserPlus, CheckCircle2, Clock } from 'lucide-react';
 
 export function MattersScreen() {
-  const { matters, matterStages, attorneys, parties, runConflictCheck, linkMatterConflictCheck, clientInvites, clientUsers } = useStore();
+  const { matters, matterStages, attorneys, parties, runConflictCheck, linkMatterConflictCheck, clientInvites, clientUsers, auditLog } = useStore();
   const [showNew, setShowNew] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [running, setRunning] = useState(false);
@@ -24,6 +26,16 @@ export function MattersScreen() {
 
   const stages = [...matterStages].sort((a, b) => a.sort_order - b.sort_order);
   const attorneyName = (id: string | null) => attorneys.find(a => a.id === id)?.name ?? 'Unassigned';
+
+  // Baseline is the firm's own median time-in-stage, derived from
+  // audit_log stage transitions. Returns empty when the firm has fewer
+  // than three comparable transitions for a stage -- no baseline, no
+  // claim. See riskSignals.ts for why this isn't a constants table.
+  const bottleneckById = useMemoRS(() => {
+    const m = new Map<string, ReturnType<typeof findBottlenecks>[number]>();
+    for (const b of findBottlenecks(matters, matterStages, auditLog)) m.set(b.matter.id, b);
+    return m;
+  }, [matters, matterStages, auditLog]);
   const clientName = (id: string | null) => parties.find(p => p.id === id)?.name ?? '—';
 
   // Bulk-eligible = sitting in an initial (pre-engagement) stage with no
@@ -148,6 +160,16 @@ export function MattersScreen() {
                           <div className="text-sm font-medium flex-1 min-w-0">{m.title}</div>
                         </div>
                         <div className="text-xs text-[var(--text-tertiary)] mb-2">{clientName(m.client_party_id)}</div>
+                        {(() => {
+                          const b = bottleneckById.get(m.id);
+                          if (!b) return null;
+                          return (
+                            <div className="mb-2 text-[11px] text-[var(--signal-warning)]">
+                              <span className="uppercase tracking-wider font-mono mr-1.5">Stalled</span>
+                              <span className="text-[var(--text-tertiary)]">{b.detail}</span>
+                            </div>
+                          );
+                        })()}
                         <div className="flex items-center justify-between gap-2">
                           <span className="text-xs text-[var(--text-secondary)] truncate">{attorneyName(m.assigned_attorney_id)}</span>
                           {eligible && (

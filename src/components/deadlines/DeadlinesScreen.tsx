@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useStore } from '../../lib/store';
+import { assessDeadlineRisk } from '../../lib/riskSignals';
 import { AlertTriangle, Clock, CheckCircle2, CalendarPlus, CalendarCheck2, ChevronLeft, ChevronRight } from 'lucide-react';
 import { formatDateOnly, parseDateOnly } from '../../lib/dates';
 
@@ -19,7 +20,7 @@ function daysUntil(dateOnlyString: string): number {
 }
 
 export function DeadlinesScreen() {
-  const { deadlines, matters, updateDeadline, firm, integrationConnections, pushDeadlineToCalendar } = useStore();
+  const { deadlines, matters, updateDeadline, firm, integrationConnections, pushDeadlineToCalendar, timeEntries, documents } = useStore();
   const locale = firm?.locale || 'en-US';
   const [pushingId, setPushingId] = useState<string | null>(null);
 
@@ -152,6 +153,24 @@ export function DeadlinesScreen() {
                         {d.is_critical && <span className="text-[10px] uppercase px-1.5 py-0.5 bg-[var(--signal-negative)]/15 text-[var(--signal-negative)] rounded-full shrink-0">Critical</span>}
                       </div>
                       <div className="text-xs text-[var(--text-tertiary)] truncate">{TYPE_LABELS[d.deadline_type]} · {matterTitle(d.matter_id)}</div>
+                      {(() => {
+                        // Date order alone can't tell you which of two
+                        // deadlines is actually in trouble. This adds the
+                        // observed signals -- prep activity, ownership,
+                        // what follows it -- without asserting any legal
+                        // consequence.
+                        const risk = assessDeadlineRisk(d, deadlines, timeEntries, documents);
+                        if (risk.level === 'none') return null;
+                        const strong = risk.level === 'at_risk';
+                        return (
+                          <div className={`mt-1 text-[11px] ${strong ? 'text-[var(--signal-negative)]' : 'text-[var(--signal-warning)]'}`}>
+                            <span className="uppercase tracking-wider font-mono mr-1.5">
+                              {strong ? 'At risk' : 'Watch'}
+                            </span>
+                            <span className="text-[var(--text-tertiary)]">{risk.reasons.join(' ')}</span>
+                          </div>
+                        );
+                      })()}
                     </div>
                   </div>
                   <div className="flex items-center justify-between sm:justify-end gap-3 shrink-0">
