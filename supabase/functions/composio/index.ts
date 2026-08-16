@@ -135,7 +135,7 @@ Deno.serve(async (req: Request) => {
     const composioUserId = `law-${firmId}`;
 
     const {
-      action, toolkit_slug, connected_account_id, query,
+      action, toolkit_slug, connected_account_id, query, callback_origin,
       title, due_date, matter_title,
       matter_id, sent_to, subject, body: emailBody,
     } = await req.json();
@@ -162,10 +162,24 @@ Deno.serve(async (req: Request) => {
     if (action === 'connect') {
       if (!toolkit_slug) return json({ error: 'toolkit_slug is required' }, 400);
       const authConfigId = await getOrCreateAuthConfig(toolkit_slug);
+      // Without a callback_url, Composio's hosted page ends at "you can
+      // close this window" and the user has to find their way back by
+      // hand. The origin comes from the caller, but is checked against an
+      // allowlist before use: this value is handed to the provider as a
+      // post-OAuth redirect target, so accepting whatever the client
+      // sends would make it an open redirect.
+      const ALLOWED_ORIGINS = ['https://law.sloelabs.com', 'http://localhost:3000'];
+      const requested = typeof callback_origin === 'string' ? callback_origin : '';
+      const origin = ALLOWED_ORIGINS.includes(requested) ? requested : ALLOWED_ORIGINS[0];
+      const callbackUrl = `${origin}/integrations?connected=${encodeURIComponent(toolkit_slug)}`;
       const linkRes = await fetch(`${COMPOSIO_BASE}/connected_accounts/link`, {
         method: 'POST',
         headers: { 'x-api-key': COMPOSIO_API_KEY, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ auth_config_id: authConfigId, user_id: composioUserId }),
+        body: JSON.stringify({
+          auth_config_id: authConfigId,
+          user_id: composioUserId,
+          callback_url: callbackUrl,
+        }),
       });
       const link = await linkRes.json();
       if (!link?.redirect_url) throw new Error(`Composio link failed: ${JSON.stringify(link)}`);
@@ -178,7 +192,43 @@ Deno.serve(async (req: Request) => {
         { headers: { 'x-api-key': COMPOSIO_API_KEY } }
       );
       const data = await statusRes.json();
-      const connections = (data.items || []).map((c: any) => ({
+
+      // Composio returns EVERY connection attempt ever made for this
+      // user, not the current one per toolkit. A Gmail that was
+      // connected, expired, and then reconnected comes back as two or
+      // three rows with the same toolkit slug. This previously mapped
+      // them straight through, and the caller did
+      // `connections.find(c => c.toolkit_slug === slug)` — first match in
+      // whatever order Composio happened to return. When a stale EXPIRED
+      // row sorted ahead of the live ACTIVE one, a genuinely working
+      // integration displayed as "Access expired — reconnect", which is
+      // exactly the bug this fixes. Reported live on a real Gmail
+      // account whose OAuth had just succeeded.
+      //
+      // Collapse to ONE row per toolkit: an ACTIVE connection always
+      // wins, and among rows of equal standing the most recent wins.
+      // Deliberately not a full status ranking — inventing an ordering
+      // over vendor statuses we do not control would be guessing. The
+      // only claim made here is that a live connection beats a dead one
+      // and newer beats older.
+      const timeOf = (c: any): number => {
+        const t = c.updated_at ?? c.updatedAt ?? c.created_at ?? c.createdAt;
+        const n = t ? new Date(t).getTime() : NaN;
+        return Number.isFinite(n) ? n : 0;
+      };
+      const best = new Map<string, any>();
+      for (const c of (data.items || [])) {
+        const slug = c.toolkit?.slug;
+        if (!slug) continue;
+        const prev = best.get(slug);
+        if (!prev) { best.set(slug, c); continue; }
+        const cActive = c.status === 'ACTIVE';
+        const pActive = prev.status === 'ACTIVE';
+        if (cActive !== pActive) { if (cActive) best.set(slug, c); continue; }
+        if (timeOf(c) > timeOf(prev)) best.set(slug, c);
+      }
+
+      const connections = [...best.values()].map((c: any) => ({
         toolkit_slug: c.toolkit?.slug, status: c.status, connected_account_id: c.id,
       }));
       return json({ connections });

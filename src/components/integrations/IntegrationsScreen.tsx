@@ -299,7 +299,7 @@ function ConnectorCard({ connector, connection, onChanged }: { connector: { slug
   const handleConnect = async () => {
     setBusy(true);
     try {
-      const { data, error } = await supabase.functions.invoke('composio', { body: { action: 'connect', toolkit_slug: connector.slug } });
+      const { data, error } = await supabase.functions.invoke('composio', { body: { action: 'connect', toolkit_slug: connector.slug, callback_origin: window.location.origin } });
       if (error || !data?.redirect_url) throw new Error(error?.message ?? 'No redirect URL returned');
       window.open(data.redirect_url, '_blank');
       showToast('success', `Complete the ${connector.name} sign-in in the new tab, then come back and refresh.`);
@@ -369,7 +369,15 @@ function BrowseCatalog({ connections, onChanged }: { connections: ConnectionStat
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => { if (e.key === 'Enter') handleSearch(); };
-  const connectionFor = (slug: string) => connections.find(c => c.toolkit_slug === slug);
+  // Prefers an ACTIVE row over any other for the same toolkit. The edge
+  // function already collapses duplicates, but a bare .find() here was
+  // half of the bug where a live Gmail showed as "Access expired" -- a
+  // stale row sorted first and won. Keeping the preference on both sides
+  // means one layer regressing cannot resurrect the symptom.
+  const connectionFor = (slug: string) => {
+    const all = connections.filter(c => c.toolkit_slug === slug);
+    return all.find(c => c.status === 'ACTIVE') ?? all[0];
+  };
 
   return (
     <div>
@@ -415,18 +423,49 @@ export function IntegrationsScreen() {
   const [loadingStatus, setLoadingStatus] = useState(true);
   const [showBrowse, setShowBrowse] = useState(false);
 
+  // A ref, not the loadingStatus state: the focus listener is registered
+  // once and would close over a stale value of that state forever.
+  const inFlight = useRef(false);
+
   const loadStatus = async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
     setLoadingStatus(true);
     try {
       const { data, error } = await supabase.functions.invoke('composio', { body: { action: 'status' } });
       if (!error && data?.connections) setConnections(data.connections);
     } catch { /* leave connections as-is on failure — cards fall back to "Connect" */ }
+    inFlight.current = false;
     setLoadingStatus(false);
   };
 
   useEffect(() => { loadStatus(); }, []);
 
-  const connectionFor = (slug: string) => connections.find(c => c.toolkit_slug === slug);
+  // The OAuth handoff happens in a second tab. Whether the provider
+  // redirects back or the user switches manually, arriving here is the
+  // moment this screen's status is known to be stale -- so refresh on
+  // focus rather than making them find the "Refresh status" link. Guarded
+  // against firing while a request is already in flight.
+  useEffect(() => {
+    const onFocus = () => { if (!document.hidden) loadStatus(); };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onFocus);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onFocus);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Prefers an ACTIVE row over any other for the same toolkit. The edge
+  // function already collapses duplicates, but a bare .find() here was
+  // half of the bug where a live Gmail showed as "Access expired" -- a
+  // stale row sorted first and won. Keeping the preference on both sides
+  // means one layer regressing cannot resurrect the symptom.
+  const connectionFor = (slug: string) => {
+    const all = connections.filter(c => c.toolkit_slug === slug);
+    return all.find(c => c.status === 'ACTIVE') ?? all[0];
+  };
   const connectedCount = connections.filter(c => c.status === 'ACTIVE').length;
 
   return (
