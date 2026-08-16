@@ -4,14 +4,41 @@ import { CommandInput } from './CommandInput';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useStore } from '../../lib/store';
 
+// Every route in routes.tsx needs an entry. The previous if-chain covered
+// seven of them and fell through to 'Law OS' for the rest, so Documents,
+// Time, Communications, History, Team, Firm Settings and the Agent
+// Library all showed the product name where their own name belongs. That
+// read as a Communications-only bug because that is where it was noticed,
+// but every screen added after the chain was written inherited it — which
+// is exactly the failure mode a fall-through default produces: silent,
+// and worse the more the product grows.
+//
+// A map keyed by path, plus a prefix pass for the one nested route, so
+// adding a screen without adding a label is a visible omission rather
+// than a silent fallback to the product name.
+const SCREEN_NAMES: Record<string, string> = {
+  '/': 'Command Center',
+  '/matters': 'Matters',
+  '/deadlines': 'Deadlines',
+  '/parties': 'Conflict Check',
+  '/documents': 'Documents',
+  '/time': 'Time',
+  '/communications': 'Communications',
+  '/history': 'History',
+  '/analyst': 'Analyst',
+  '/operator': 'Operator',
+  '/agents': 'Agent Library',
+  '/team': 'Team',
+  '/integrations': 'Integrations',
+  '/settings': 'Firm Settings',
+  '/settings/import': 'Import',
+};
+
 const getScreenName = (pathname: string) => {
-  if (pathname === '/') return 'Command Center';
-  if (pathname === '/matters') return 'Matters';
-  if (pathname === '/deadlines') return 'Deadlines';
-  if (pathname === '/parties') return 'Conflict Check';
-  if (pathname === '/analyst') return 'Analyst';
-  if (pathname === '/operator') return 'Operator';
-  if (pathname === '/integrations') return 'Integrations';
+  const exact = SCREEN_NAMES[pathname];
+  if (exact) return exact;
+  // /agents/:agentKey — the specialist chat screens.
+  if (pathname.startsWith('/agents/')) return 'Agent Library';
   return 'Law OS';
 };
 
