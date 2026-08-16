@@ -111,3 +111,71 @@ ${cfg.responseStyle}
 Respond directly and practically in markdown. Stay within your specific job — if the request is really for general execution help or strategic analysis outside your scope, say so briefly and suggest the Operator or Analyst instead. Never state a legal conclusion or give legal advice as fact — flag those for attorney review instead.
 `;
 };
+
+// ─────────────────────────────────────────────────────────────────────
+// Draft-and-send email from chat — any agent.
+//
+// TWO-PASS, same principle already applied to dynamic tool use
+// (ai-call's needsTools/runWithTools): a cheap yes/no classify first,
+// and the richer, context-carrying compose call only on YES. Every
+// ordinary chat message pays nothing extra; a message that asks for an
+// email pays one small classify call before the real compose call.
+//
+// THE MODEL NEVER RESOLVES A RECIPIENT ADDRESS. It selects a party_id
+// from a CLOSED LIST of this firm's real parties handed to it in the
+// prompt — it cannot name a party that isn't in the list, and even so
+// the caller re-validates the returned id is actually in that list
+// before trusting it (never assume a closed list constrains a model
+// that can still hallucinate an id shaped like the others). The actual
+// email address is looked up afterward in code from client_invites /
+// past matter_communications — never asked of the model, never
+// invented, and left blank rather than guessed if nothing is on file.
+// See src/lib/emailCompose.ts.
+// ─────────────────────────────────────────────────────────────────────
+
+// The user message is placed FIRST, not after the instructional preamble.
+// callGemini caches on `prompt.slice(0, 200) + expectJson` (see
+// src/lib/gemini.ts) — the preamble below alone is 241 characters, past
+// that window, so with the message appended AFTER it every classify call
+// would share the exact same cache key regardless of what was actually
+// asked. Found by measuring the prefix length before shipping: after
+// the very first call, every later "is this an email request?" check
+// would have returned that one cached answer forever, either disabling
+// the feature or hijacking every subsequent chat message into
+// email-compose mode. Leading with the message means the cache key
+// varies with it, as it needs to.
+export const emailIntentClassifyPrompt = (message: string) => `
+User message: ${message}
+
+Does the message above ask an AI assistant, inside a law firm's case management product, to draft, write, compose, or send an EMAIL to someone? Answer with exactly one word: YES or NO.
+`;
+
+export interface EmailComposeCandidate {
+  id: string;
+  label: string;
+}
+
+// Same cache-key reasoning as emailIntentClassifyPrompt above — message
+// leads, everything else follows.
+export const emailComposePrompt = (
+  message: string,
+  matters: EmailComposeCandidate[],
+  parties: EmailComposeCandidate[],
+) => `
+User's request: ${message}
+
+You are drafting an email on behalf of an attorney at a law firm, from the request above. Return ONLY a JSON object, no other text:
+
+{
+  "matter_id": "string or null — MUST be one of the ids in the Matters list below, or null if you cannot tell which matter this is about",
+  "party_id": "string or null — MUST be one of the ids in the People list below, or null if you cannot tell who this should go to",
+  "subject": "string — a real, specific email subject line",
+  "body": "string — a genuinely written, professional email body. Reference only facts already present in the user's request or in the matter/people names given below — never invent case facts, dates, outcomes, or details you were not given. If you don't have enough to write substantively, write a short, honest placeholder body the attorney can fill in rather than inventing content."
+}
+
+Matters (id, title) — pick matter_id from this list only, or null:
+${JSON.stringify(matters)}
+
+People (id, name) — pick party_id from this list only, or null:
+${JSON.stringify(parties)}
+`;

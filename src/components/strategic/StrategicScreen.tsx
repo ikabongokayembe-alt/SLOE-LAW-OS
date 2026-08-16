@@ -10,6 +10,8 @@ import { ContextPanel } from './ContextPanel';
 import { AiDisclaimer } from '../shared/AiDisclaimer';
 import { ConversationInbox } from '../agents/ConversationInbox';
 import { useConversationThread } from '../../lib/useConversationThread';
+import { SendEmailModal } from '../communications/SendEmailModal';
+import { tryComposeEmail, ComposedEmail } from '../../lib/emailCompose';
 
 // Same char budgets the old inline `.substring(0, N)` used — unchanged
 // here; what changed is what fills them (see contextBuilder.ts).
@@ -17,7 +19,8 @@ const CHAT_CONTEXT_BUDGET = 3000;
 const INSIGHTS_CONTEXT_BUDGET = 5000;
 
 export function StrategicScreen() {
-  const { matters, deadlines, parties, conflictChecks, insights, addInsights, firm } = useStore();
+  const { matters, deadlines, parties, conflictChecks, insights, addInsights, firm, clientInvites, communications } = useStore();
+  const [emailDraft, setEmailDraft] = useState<ComposedEmail | null>(null);
   const businessInsights = useMemo(() => insights.filter((i: any) => i.scope !== 'market'), [insights]);
 
   const [activeTab, setActiveTab] = useState('My Business');
@@ -52,10 +55,24 @@ export function StrategicScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleSend = (overrideText?: string) => {
+  const handleSend = async (overrideText?: string) => {
     const textToSend = overrideText ?? inputValue;
     if (!textToSend.trim() || busy) return;
     setInputValue('');
+
+    // Checked before the normal strategic reply, same reasoning as
+    // OperatorScreen: an email request skips the model-generated prose
+    // answer entirely rather than producing both. See emailCompose.ts.
+    const composed = await tryComposeEmail(textToSend, { matters, parties, clientInvites, communications });
+    if (composed) {
+      const ack = composed.recipientResolved
+        ? `I've drafted an email to ${composed.partyName ?? 'the recipient'} — review it in the panel that just opened before sending.`
+        : `I've drafted the email content, but there's no email address on file for ${composed.partyName ?? 'that person'} — I've opened the draft so you can add one and review before sending.`;
+      await send(textToSend, async (_history, onChunk) => { onChunk(ack); return ack; });
+      setEmailDraft(composed);
+      return;
+    }
+
     send(textToSend, (history, onChunk) => {
       // Firm jurisdiction (country/region) travels with every request so
       // the Analyst can reason about which legal system it's operating in
@@ -96,6 +113,15 @@ export function StrategicScreen() {
 
   return (
     <div className="flex flex-col h-[calc(100dvh-190px)] lg:h-[calc(100vh-140px)]">
+      {emailDraft && (
+        <SendEmailModal
+          onClose={() => setEmailDraft(null)}
+          defaultMatterId={emailDraft.matterId ?? undefined}
+          defaultTo={emailDraft.to || undefined}
+          defaultSubject={emailDraft.subject}
+          defaultBody={emailDraft.body}
+        />
+      )}
       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-3 mb-6">
         <div>
            <h2 className="text-xl font-medium mb-1">Analyst</h2>

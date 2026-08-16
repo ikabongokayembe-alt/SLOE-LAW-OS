@@ -8,6 +8,8 @@ import { buildFirmContext } from '../../lib/contextBuilder';
 import { AiDisclaimer } from '../shared/AiDisclaimer';
 import { ConversationInbox } from '../agents/ConversationInbox';
 import { useConversationThread } from '../../lib/useConversationThread';
+import { SendEmailModal } from '../communications/SendEmailModal';
+import { tryComposeEmail, ComposedEmail } from '../../lib/emailCompose';
 
 // Same budget the old inline `.substring(0, 3000)` used — see
 // contextBuilder.ts for why what fills it changed, not the size.
@@ -20,8 +22,9 @@ const SUGGESTIONS = [
 ];
 
 export function OperatorScreen() {
-  const { matters, deadlines, parties, conflictChecks, firm } = useStore();
+  const { matters, deadlines, parties, conflictChecks, firm, clientInvites, communications } = useStore();
   const [inputValue, setInputValue] = useState('');
+  const [emailDraft, setEmailDraft] = useState<ComposedEmail | null>(null);
   // Bumped on every write so the rail refetches — see ConversationInbox.
   const [refreshKey, setRefreshKey] = useState(0);
   const bumpRail = useCallback(() => setRefreshKey(k => k + 1), []);
@@ -33,10 +36,30 @@ export function OperatorScreen() {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [messages, streaming]);
 
-  const handleSend = (overrideText?: string) => {
+  const handleSend = async (overrideText?: string) => {
     const text = overrideText ?? inputValue;
     if (!text.trim() || busy) return;
     setInputValue('');
+
+    // Checked BEFORE the normal reply, not after: if this turns out to
+    // be an email request, the Operator doesn't also generate a prose
+    // answer to the same message via a second model call. See
+    // emailCompose.ts for the two-pass classify (cheap, every message)
+    // + compose (only on a real email request) split, and for why the
+    // recipient address is resolved in code and never by the model.
+    const composed = await tryComposeEmail(text, { matters, parties, clientInvites, communications });
+    if (composed) {
+      const ack = composed.recipientResolved
+        ? `I've drafted an email to ${composed.partyName ?? 'the recipient'} — review it in the panel that just opened before sending.`
+        : `I've drafted the email content, but there's no email address on file for ${composed.partyName ?? 'that person'} — I've opened the draft so you can add one and review before sending.`;
+      // A static reply, not a second Gemini call: `run` only needs to
+      // resolve to text, and reusing send() here keeps this turn on the
+      // exact same persistence/unread path as every other message.
+      await send(text, async (_history, onChunk) => { onChunk(ack); return ack; });
+      setEmailDraft(composed);
+      return;
+    }
+
     // The context is rebuilt per message rather than per conversation:
     // matters and deadlines move while a thread is open, and a reply
     // should reflect the caseload as it is now, not as it was when the
@@ -56,6 +79,15 @@ export function OperatorScreen() {
 
   return (
     <div className="flex flex-col h-[calc(100dvh-56px)] -mx-4 md:-mx-8 -mt-6">
+      {emailDraft && (
+        <SendEmailModal
+          onClose={() => setEmailDraft(null)}
+          defaultMatterId={emailDraft.matterId ?? undefined}
+          defaultTo={emailDraft.to || undefined}
+          defaultSubject={emailDraft.subject}
+          defaultBody={emailDraft.body}
+        />
+      )}
       <div className="min-h-[4rem] bg-[var(--bg-secondary)] border-b border-[var(--border-subtle)] px-4 md:px-8 py-2 sm:py-0 flex flex-col sm:flex-row sm:items-center justify-between gap-1 sm:gap-2 shrink-0">
         <div className="flex items-center gap-2 min-w-0">
           <Wrench className="w-4 h-4 text-[var(--text-secondary)] shrink-0" />

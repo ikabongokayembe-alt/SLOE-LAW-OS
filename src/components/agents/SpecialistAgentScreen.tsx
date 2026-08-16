@@ -8,6 +8,8 @@ import { specialistChatPrompt } from '../../lib/prompts';
 import { buildFirmContext } from '../../lib/contextBuilder';
 import { AiDisclaimer } from '../shared/AiDisclaimer';
 import { getSpecialist, ContextKey } from '../../data/specialists';
+import { SendEmailModal } from '../communications/SendEmailModal';
+import { tryComposeEmail, ComposedEmail } from '../../lib/emailCompose';
 
 // Same budget the old inline `.substring(0, 3000)` used — see
 // contextBuilder.ts for why what fills it changed, not the size.
@@ -22,9 +24,10 @@ const CHAT_CONTEXT_BUDGET = 3000;
 export function SpecialistAgentScreen() {
   const { agentKey } = useParams<{ agentKey: string }>();
   const navigate = useNavigate();
-  const { matters, deadlines, parties, conflictChecks, documents, practiceAreas, firm, agentRequests, removeAgentRequest } = useStore();
+  const { matters, deadlines, parties, conflictChecks, documents, practiceAreas, firm, agentRequests, removeAgentRequest, clientInvites, communications } = useStore();
 
   const [chatHistory, setChatHistory] = useState<{ role: 'user' | 'assistant'; content: string }[]>([]);
+  const [emailDraft, setEmailDraft] = useState<ComposedEmail | null>(null);
   const [inputValue, setInputValue] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [streamingContent, setStreamingContent] = useState('');
@@ -69,6 +72,24 @@ export function SpecialistAgentScreen() {
     setChatHistory(prev => [...prev, { role: 'user', content: text }]);
     setIsTyping(true);
     setStreamingContent('');
+
+    // Same email-compose branch as Operator/Analyst, applied once here
+    // since SpecialistAgentScreen is the one shared component behind
+    // every specialist — wiring it here covers all six, not just this
+    // agent. Checked before the specialist's own model call so a
+    // detected email request doesn't ALSO get answered as prose.
+    const composed = await tryComposeEmail(text, { matters, parties, clientInvites, communications });
+    if (composed) {
+      const ack = composed.recipientResolved
+        ? `I've drafted an email to ${composed.partyName ?? 'the recipient'} — review it in the panel that just opened before sending.`
+        : `I've drafted the email content, but there's no email address on file for ${composed.partyName ?? 'that person'} — I've opened the draft so you can add one and review before sending.`;
+      setChatHistory(prev => [...prev, { role: 'assistant', content: ack }]);
+      setEmailDraft(composed);
+      setStreamingContent('');
+      setIsTyping(false);
+      return;
+    }
+
     try {
       const built = buildFirmContext(context, CHAT_CONTEXT_BUDGET);
       const full = await streamGeminiContent(
@@ -95,6 +116,15 @@ export function SpecialistAgentScreen() {
 
   return (
     <div className="flex flex-col h-[calc(100vh-56px)] -mx-4 md:-mx-8 -mt-6">
+      {emailDraft && (
+        <SendEmailModal
+          onClose={() => setEmailDraft(null)}
+          defaultMatterId={emailDraft.matterId ?? undefined}
+          defaultTo={emailDraft.to || undefined}
+          defaultSubject={emailDraft.subject}
+          defaultBody={emailDraft.body}
+        />
+      )}
       <div className="min-h-[4rem] bg-[var(--bg-secondary)] border-b border-[var(--border-subtle)] px-4 md:px-8 py-2 sm:py-0 flex flex-col sm:flex-row sm:items-center justify-between gap-1 sm:gap-2 shrink-0">
         <div className="flex items-center gap-2 min-w-0">
           <specialist.icon className="w-4 h-4 text-[var(--text-secondary)] shrink-0" />
