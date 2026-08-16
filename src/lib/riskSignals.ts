@@ -25,7 +25,7 @@
 //     not tuned to look clever.
 // ─────────────────────────────────────────────────────────────────────
 
-import { Matter, Deadline, LawDocument, TimeEntry, AuditLogEntry, MatterStage } from '../types';
+import { Matter, Deadline, LawDocument, TimeEntry, AuditLogEntry, MatterStage, MatterCommunication } from '../types';
 
 const DAY = 86400000;
 
@@ -215,4 +215,138 @@ export function assessDeadlineRisk(
   const level: DeadlineRiskLevel =
     d.is_critical && daysLeft <= 14 && reasons.length >= 2 ? 'at_risk' : 'watch';
   return { level, reasons, downstream };
+}
+
+// ── Sub-task 3: absence detection ────────────────────────────────────
+//
+// Documents has the same trap as stage norms: a checklist of "documents
+// every family matter should have" would be an invented professional
+// standard, and there is no verifiable source for one. So the baseline
+// is again the firm's own corpus — a document kind is only "expected"
+// if enough of this firm's OWN other active matters actually have one.
+//
+// The kind itself is inferred from the file NAME, because the schema has
+// no document category (only a MIME type). That is a weak signal and is
+// labelled as such everywhere it surfaces: this reports a filename
+// pattern that is common here and absent there. It is explicitly not a
+// determination that a file is legally missing, and the UI must never
+// phrase it as one.
+
+// Conservative and deliberately short. A longer list would produce more
+// findings and more false ones; these are terms whose presence in a
+// filename is a reasonably strong hint at the document's kind.
+const DOC_KINDS: { key: string; label: string; test: RegExp }[] = [
+  { key: 'retainer',   label: 'retainer or engagement letter', test: /\b(retainer|engagement)\b/i },
+  { key: 'disclosure', label: 'disclosure',                    test: /\bdisclosur/i },
+  { key: 'petition',   label: 'petition',                      test: /\bpetition\b/i },
+  { key: 'order',      label: 'order',                         test: /\border\b/i },
+  { key: 'agreement',  label: 'agreement',                     test: /\bagreement\b/i },
+];
+
+// Enough other matters must carry a kind before its absence means
+// anything. Below this, the firm has not established a pattern and no
+// gap is reported.
+const MIN_MATTERS_WITH_KIND = 3;
+
+export interface DocumentGap {
+  matter: Matter;
+  missing: { key: string; label: string; seenOnMatters: number }[];
+  detail: string;
+}
+
+export function findDocumentGaps(matters: Matter[], documents: LawDocument[]): DocumentGap[] {
+  const active = matters.filter(m => m.status === 'active' && !m.deleted_at);
+  if (active.length < MIN_MATTERS_WITH_KIND + 1) return [];
+
+  const kindsByMatter = new Map<string, Set<string>>();
+  for (const d of documents) {
+    if (!d.matter_id) continue;
+    const set = kindsByMatter.get(d.matter_id) ?? new Set<string>();
+    for (const k of DOC_KINDS) if (k.test.test(d.file_name)) set.add(k.key);
+    kindsByMatter.set(d.matter_id, set);
+  }
+
+  // How many active matters carry each kind — the firm's own pattern.
+  const prevalence = new Map<string, number>();
+  for (const m of active) {
+    for (const key of kindsByMatter.get(m.id) ?? []) {
+      prevalence.set(key, (prevalence.get(key) ?? 0) + 1);
+    }
+  }
+
+  const out: DocumentGap[] = [];
+  for (const m of active) {
+    const has = kindsByMatter.get(m.id) ?? new Set<string>();
+    const missing = DOC_KINDS
+      .filter(k => (prevalence.get(k.key) ?? 0) >= MIN_MATTERS_WITH_KIND && !has.has(k.key))
+      .map(k => ({ key: k.key, label: k.label, seenOnMatters: prevalence.get(k.key)! }));
+    if (missing.length === 0) continue;
+    out.push({
+      matter: m,
+      missing,
+      detail: missing
+        .map(x => `no ${x.label} on file (${x.seenOnMatters} other active matters have one)`)
+        .join('; ') + '. Based on file names, not document contents — worth a look, not a finding.',
+    });
+  }
+  return out;
+}
+
+export interface StaleMatterContact {
+  matter: Matter;
+  daysSilent: number | null;
+  detail: string;
+}
+
+export function findStaleContacts(
+  matters: Matter[], communications: MatterCommunication[], thresholdDays = 21, now = Date.now(),
+): StaleMatterContact[] {
+  const out: StaleMatterContact[] = [];
+  for (const m of matters) {
+    if (m.status !== 'active' || m.deleted_at) continue;
+    const last = communications
+      .filter(c => c.matter_id === m.id)
+      .map(c => new Date(c.sent_at).getTime())
+      .sort((a, b) => b - a)[0];
+    const days = last ? Math.round((now - last) / DAY) : null;
+    const openedDays = Math.round((now - new Date(m.opened_date).getTime()) / DAY);
+    if (days !== null && days < thresholdDays) continue;
+    if (days === null && openedDays < thresholdDays) continue;
+    out.push({
+      matter: m,
+      daysSilent: days,
+      detail: days !== null
+        ? `No logged contact in ${days} days.`
+        : `No client contact has ever been logged, matter open ${openedDays} days.`,
+    });
+  }
+  return out.sort((a, b) => (b.daysSilent ?? 9999) - (a.daysSilent ?? 9999));
+}
+
+// The one safe automation in this brief: a DRAFT the lawyer reads,
+// edits and sends. Deliberately deterministic rather than model-written.
+// A generated check-in would be the one place a model could quietly
+// assert something about the matter's posture ("your hearing went
+// well"), and there is no way to review that at a glance. This states
+// only what the record shows and leaves the substance to the author —
+// which is also why the body ends mid-thought rather than signing off.
+export function draftFollowUp(matterTitle: string, clientName: string | null, daysSilent: number | null): { subject: string; body: string } {
+  const who = clientName && clientName !== '—' ? clientName : 'there';
+  const since = daysSilent !== null
+    ? `It has been ${daysSilent} days since our last recorded correspondence`
+    : 'I want to make sure you have an update';
+  return {
+    subject: `Update on ${matterTitle}`,
+    body: [
+      `Dear ${who},`,
+      '',
+      `${since}, and I wanted to check in on ${matterTitle}.`,
+      '',
+      '[Add the current position and any action you need from the client.]',
+      '',
+      'Please let me know if you have any questions in the meantime.',
+      '',
+      'Kind regards,',
+    ].join('\n'),
+  };
 }

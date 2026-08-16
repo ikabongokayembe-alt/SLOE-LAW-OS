@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { useStore } from '../../lib/store';
 import { Mail, Plus } from 'lucide-react';
 import { SendEmailModal } from './SendEmailModal';
+import { findStaleContacts, draftFollowUp } from '../../lib/riskSignals';
 
 // Foundation of "client communication isn't captured anywhere" from the
 // original audit: sending and logging only in this pass — no inbox
@@ -10,9 +11,10 @@ import { SendEmailModal } from './SendEmailModal';
 // convention as Documents/Time (there's no per-matter detail page in this
 // codebase to nest a tab into).
 export function CommunicationsScreen() {
-  const { communications, matters, integrationConnections } = useStore();
+  const { communications, matters, integrationConnections, parties } = useStore();
   const [matterFilter, setMatterFilter] = useState('all');
   const [showSend, setShowSend] = useState(false);
+  const [draftFor, setDraftFor] = useState<{ matterId: string; subject: string; body: string } | null>(null);
 
   const matterTitle = (id: string) => matters.find(m => m.id === id)?.title ?? '—';
   const gmailConnected = integrationConnections?.some(c => c.toolkit_slug === 'gmail' && c.status === 'ACTIVE') ?? null;
@@ -75,7 +77,38 @@ export function CommunicationsScreen() {
         </div>
       )}
 
+      {(() => {
+        // Absence detection: an active matter with no logged contact for
+        // three weeks. The draft is deterministic, not model-written --
+        // see draftFollowUp for why a generated check-in is the one place
+        // a model could quietly assert something about the matter.
+        const stale = findStaleContacts(matters, communications).slice(0, 3);
+        if (stale.length === 0) return null;
+        return (
+          <div className="mb-4 space-y-2">
+            {stale.map(s2 => {
+              const m2 = s2.matter;
+              const client = parties.find(p => p.id === m2.client_party_id)?.name ?? null;
+              return (
+                <div key={m2.id} className="flex flex-col sm:flex-row sm:items-center gap-2 bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg px-4 py-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium truncate">{m2.title}</div>
+                    <div className="text-xs text-[var(--text-tertiary)]">{s2.detail}</div>
+                  </div>
+                  <button
+                    onClick={() => setDraftFor({ matterId: m2.id, ...draftFollowUp(m2.title, client, s2.daysSilent) })}
+                    className="h-8 px-3 text-xs font-medium bg-[var(--text-primary)] text-[var(--bg-primary)] rounded shrink-0"
+                  >
+                    Draft follow-up
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
       {showSend && <SendEmailModal onClose={() => setShowSend(false)} defaultMatterId={matterFilter !== 'all' ? matterFilter : undefined} />}
+      {draftFor && <SendEmailModal onClose={() => setDraftFor(null)} defaultMatterId={draftFor.matterId} defaultSubject={draftFor.subject} defaultBody={draftFor.body} />}
     </div>
   );
 }

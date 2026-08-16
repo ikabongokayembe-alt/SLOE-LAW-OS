@@ -8,13 +8,13 @@ const inputClass = 'w-full h-10 px-3 bg-[var(--bg-tertiary)] border border-[var(
 
 // Same modal shell as LogTimeModal/NewMatterModal — a single form, one
 // container/header/token style, no reinvented visual language.
-export function SendEmailModal({ onClose, defaultMatterId }: { onClose: () => void; defaultMatterId?: string }) {
+export function SendEmailModal({ onClose, defaultMatterId, defaultSubject, defaultBody }: { onClose: () => void; defaultMatterId?: string; defaultSubject?: string; defaultBody?: string }) {
   const { matters, integrationConnections, sendMatterCommunication } = useStore();
 
   const [matterId, setMatterId] = useState(defaultMatterId ?? matters[0]?.id ?? '');
   const [to, setTo] = useState('');
-  const [subject, setSubject] = useState('');
-  const [body, setBody] = useState('');
+  const [subject, setSubject] = useState(defaultSubject ?? '');
+  const [body, setBody] = useState(defaultBody ?? '');
   const [submitting, setSubmitting] = useState(false);
 
   const gmailConnected = integrationConnections?.some(c => c.toolkit_slug === 'gmail' && c.status === 'ACTIVE') ?? null;

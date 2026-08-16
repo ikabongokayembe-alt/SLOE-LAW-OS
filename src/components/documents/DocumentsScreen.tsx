@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../../lib/store';
+import { findDocumentGaps } from '../../lib/riskSignals';
 import { useAuth } from '../../lib/auth';
 import { supabase } from '../../lib/supabase';
 import { FileText, Upload, Trash2, Download, History, Search, X, Eye, EyeOff, PenLine, RefreshCw } from 'lucide-react';
@@ -239,6 +240,22 @@ export function DocumentsScreen() {
       <h2 className="text-xl font-medium mb-1">Documents</h2>
       <p className="text-sm text-[var(--text-secondary)] mb-6">Every file attached to a matter, in one place.</p>
 
+{(() => {
+        // Firm-relative, filename-derived. Says nothing when this firm
+        // has not established a pattern -- see findDocumentGaps.
+        const gaps = findDocumentGaps(matters, documents).slice(0, 3);
+        if (gaps.length === 0) return null;
+        return (
+          <div className="mb-6 space-y-2">
+            {gaps.map(g => (
+              <div key={g.matter.id} className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg px-4 py-3">
+                <div className="text-sm font-medium">{g.matter.title}</div>
+                <div className="text-xs text-[var(--text-tertiary)] mt-0.5">{g.detail}</div>
+              </div>
+            ))}
+          </div>
+        );
+      })()}
       <div className="flex flex-wrap items-center gap-2 mb-6 bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg p-4">
         <select
           value={uploadTarget}
