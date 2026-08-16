@@ -1,68 +1,109 @@
 import { useMemo, useState } from 'react';
 import { useStore } from '../../lib/store';
 import { AgentLibraryTeaserCard } from './AgentLibraryTeaserCard';
-import { Sparkline } from './Sparkline';
 import { Link, useNavigate } from 'react-router-dom';
-import { AlertTriangle, Sparkles } from 'lucide-react';
-import { formatDateOnly } from '../../lib/dates';
+import { Sparkles, ShieldAlert, Banknote, MessageCircle, Info, ArrowRight } from 'lucide-react';
+import { topUrgentActions, UrgentAction, ConsequenceClass } from '../../lib/urgentActions';
 
 function daysUntil(dateStr: string): number {
   return Math.round((new Date(dateStr).getTime() - new Date().setHours(0, 0, 0, 0)) / 86400000);
 }
 
-// Real day-by-day bucketing — no fabricated trend data. Returns 7 counts,
-// oldest to newest, of how many items in `dates` fall on each of the
-// last 7 days (or next 7, if `forward` is true).
-function bucketByDay(dates: string[], forward = false): number[] {
-  const buckets: number[] = new Array(7).fill(0);
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  for (const d of dates) {
-    const day = new Date(d); day.setHours(0, 0, 0, 0);
-    const diff = Math.round((day.getTime() - today.getTime()) / 86400000);
-    const idx = forward ? diff : diff + 6;
-    if (idx >= 0 && idx < 7) buckets[idx]++;
-  }
-  return buckets;
-}
-
-function StatCard({ label, value, negative, sparklineData, sparklineColor }: { label: string; value: number; negative?: boolean; sparklineData?: number[]; sparklineColor?: string }) {
+// Counts are context, not the point of this screen, so they render as a
+// single quiet strip rather than four cards competing with the decisions
+// above them. The sparklines that used to sit here are gone deliberately:
+// they were drawn from different series than the numbers beside them, so
+// "Pending conflict checks 0" appeared above a rising line. A trend that
+// contradicts its own figure is worse than no trend.
+function StatStrip({ items }: { items: { label: string; value: number; to: string; alarming?: boolean }[] }) {
   return (
-    <div className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg p-4 flex items-center justify-between">
-      <div>
-        <div className="text-[10px] uppercase tracking-wider text-[var(--text-tertiary)] mb-1">{label}</div>
-        <div className={`text-2xl font-mono ${negative && value > 0 ? 'text-[var(--signal-negative)]' : ''}`}>{value}</div>
-      </div>
-      {sparklineData && sparklineData.some(v => v > 0) && (
-        <Sparkline data={sparklineData} color={sparklineColor} />
-      )}
+    <div className="flex flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3 bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg">
+      {items.map(s => (
+        <Link key={s.label} to={s.to} className="group flex items-baseline gap-2 min-w-0">
+          <span className={`text-sm font-medium tabular-nums ${s.alarming && s.value > 0 ? 'text-[var(--signal-negative)]' : 'text-[var(--text-primary)]'}`}>
+            {s.value}
+          </span>
+          <span className="text-xs text-[var(--text-tertiary)] group-hover:text-[var(--text-secondary)] transition-colors truncate">
+            {s.label}
+          </span>
+        </Link>
+      ))}
     </div>
   );
 }
 
+const CONSEQUENCE_META: Record<ConsequenceClass, { label: string; icon: any; color: string }> = {
+  professional: { label: 'Professional risk', icon: ShieldAlert, color: 'var(--signal-negative)' },
+  revenue:      { label: 'Revenue',           icon: Banknote,   color: 'var(--accent-primary)' },
+  relationship: { label: 'Client',            icon: MessageCircle, color: 'var(--accent-secondary)' },
+};
+
+function ActionCard({ action }: { action: UrgentAction }) {
+  const meta = CONSEQUENCE_META[action.consequence];
+  const Icon = meta.icon;
+  return (
+    <Link
+      to={action.href}
+      className="group block bg-[var(--bg-secondary)] border border-[var(--border-subtle)] hover:border-[var(--border-strong)] rounded-lg p-4 transition-colors"
+      // The whole card is the target. The previous Urgent panel rendered
+      // its rows as plain divs styled like list items — they looked
+      // actionable and did nothing when clicked.
+      style={{ borderLeftColor: meta.color, borderLeftWidth: 3 }}
+    >
+      <div className="flex items-center gap-2 mb-1.5">
+        <Icon className="w-3.5 h-3.5 shrink-0" style={{ color: meta.color }} />
+        <span className="text-[10px] uppercase tracking-wider font-mono" style={{ color: meta.color }}>
+          {meta.label}
+        </span>
+      </div>
+
+      <div className="text-sm font-medium mb-1">{action.title}</div>
+      <div className="text-xs text-[var(--text-secondary)] mb-2">{action.detail}</div>
+
+      <div className="flex items-start gap-1.5 text-xs text-[var(--text-tertiary)]">
+        {action.grounding === 'general' && <Info className="w-3 h-3 shrink-0 mt-0.5" />}
+        <span>
+          {/* Anything not derived purely from stored values is labelled,
+              so a general risk framing is never mistaken for a verified
+              jurisdictional rule. Only the SOL engine's checked citations
+              are presented as settled. */}
+          {action.grounding === 'general' && (
+            <span className="text-[var(--text-secondary)] font-medium">General guidance — not jurisdiction-verified. </span>
+          )}
+          {action.reasoning}
+        </span>
+      </div>
+
+      <span className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-[var(--text-primary)]">
+        {action.ctaLabel}
+        <ArrowRight className="w-3 h-3 group-hover:translate-x-0.5 transition-transform" />
+      </span>
+    </Link>
+  );
+}
+
 export function DashboardScreen() {
-  const { matters, deadlines, conflictChecks, parties, firm } = useStore();
-  const locale = firm?.locale || 'en-US';
+  const { matters, deadlines, conflictChecks, documents, timeEntries, communications, parties } = useStore();
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
 
+  const actions = useMemo(
+    () => topUrgentActions({ matters, deadlines, documents, timeEntries, communications, conflictChecks, parties }, 5),
+    [matters, deadlines, documents, timeEntries, communications, conflictChecks, parties],
+  );
+
   const stats = useMemo(() => {
-    const activeMatters = matters.filter(m => m.status === 'active');
-    const upcomingCritical = deadlines.filter(d => d.status === 'upcoming' && d.is_critical && daysUntil(d.due_date) <= 14);
-    const overdue = deadlines.filter(d => d.status === 'upcoming' && daysUntil(d.due_date) < 0);
-    const pendingConflicts = conflictChecks.filter(c => c.status === 'pending' || c.status === 'flagged');
-
-    // All genuinely computed from real timestamps already stored — no
-    // invented data. Matters opened per day (last 7d), critical deadlines
-    // due per day (next 7d), conflict checks run per day (last 7d).
-    const mattersOpenedTrend = bucketByDay(matters.map(m => m.opened_date));
-    const criticalDeadlineTrend = bucketByDay(deadlines.filter(d => d.is_critical).map(d => d.due_date), true);
-    const conflictCheckTrend = bucketByDay(conflictChecks.map(c => c.created_at));
-
-    return { activeMatters: activeMatters.length, upcomingCritical, overdue, pendingConflicts, mattersOpenedTrend, criticalDeadlineTrend, conflictCheckTrend };
+    const active = matters.filter(m => m.status === 'active').length;
+    const overdue = deadlines.filter(d => d.status === 'upcoming' && daysUntil(d.due_date) < 0).length;
+    const critical = deadlines.filter(d => d.status === 'upcoming' && d.is_critical && daysUntil(d.due_date) <= 14).length;
+    const pending = conflictChecks.filter(c => c.status === 'pending' || c.status === 'flagged').length;
+    return [
+      { label: 'active matters', value: active, to: '/matters' },
+      { label: 'critical in 14d', value: critical, to: '/deadlines' },
+      { label: 'overdue', value: overdue, to: '/deadlines', alarming: true },
+      { label: 'conflict checks open', value: pending, to: '/parties', alarming: true },
+    ];
   }, [matters, deadlines, conflictChecks]);
-
-  const recentMatters = useMemo(() => [...matters].sort((a, b) => new Date(b.opened_date).getTime() - new Date(a.opened_date).getTime()).slice(0, 5), [matters]);
-  const clientName = (id: string | null) => parties.find(p => p.id === id)?.name ?? '—';
 
   const handleAsk = () => {
     if (!query.trim()) return;
@@ -70,7 +111,34 @@ export function DashboardScreen() {
   };
 
   return (
-    <div className="flex flex-col space-y-6">
+    <div className="flex flex-col space-y-5 max-w-4xl">
+      {/* The decisions lead. Counts follow. Recent Matters is gone from
+          this screen on purpose: it duplicated the Matters board while
+          telling nobody anything they had to act on, and the actions
+          below already name the matters that need attention. Removing
+          noise, not substance — the full list is one click away. */}
+      <div>
+        <h2 className="text-xl font-medium mb-1">What needs a decision</h2>
+        <p className="text-sm text-[var(--text-secondary)]">
+          Ranked by consequence — professional risk first, then revenue, then client relationships.
+        </p>
+      </div>
+
+      {actions.length === 0 ? (
+        <div className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg p-6 text-sm text-[var(--text-secondary)]">
+          Nothing needs a decision right now — no overdue dates, no unscreened matters, no matter gone quiet.
+          <span className="block text-xs text-[var(--text-tertiary)] mt-1">
+            This checks deadlines, conflict screening, client contact and unbilled time across your active matters.
+          </span>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {actions.map(a => <ActionCard key={a.id} action={a} />)}
+        </div>
+      )}
+
+      <StatStrip items={stats} />
+
       <button
         onClick={handleAsk}
         className="w-full flex items-center gap-3 bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg p-4 text-left hover:border-[var(--border-strong)] transition-colors"
@@ -81,61 +149,10 @@ export function DashboardScreen() {
           onChange={e => setQuery(e.target.value)}
           onClick={e => e.stopPropagation()}
           onKeyDown={e => e.key === 'Enter' && handleAsk()}
-          placeholder="Which matters need attention before Friday's hearing?"
+          placeholder="Ask the Analyst something about your caseload…"
           className="flex-1 bg-transparent text-sm focus:outline-none placeholder:italic"
         />
       </button>
-
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <StatCard label="Active Matters" value={stats.activeMatters} sparklineData={stats.mattersOpenedTrend} sparklineColor="var(--signal-positive)" />
-        <StatCard label="Critical Deadlines (14d)" value={stats.upcomingCritical.length} sparklineData={stats.criticalDeadlineTrend} sparklineColor="var(--signal-warning)" />
-        <StatCard label="Overdue" value={stats.overdue.length} negative />
-        <StatCard label="Pending Conflict Checks" value={stats.pendingConflicts.length} sparklineData={stats.conflictCheckTrend} sparklineColor="var(--accent-secondary)" />
-      </div>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <div className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg p-5">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-sm font-medium">Urgent</h3>
-            <Link to="/deadlines" className="text-xs text-[var(--accent-secondary)] hover:underline">View all deadlines</Link>
-          </div>
-          {stats.overdue.length === 0 && stats.upcomingCritical.length === 0 ? (
-            <div className="text-xs text-[var(--text-tertiary)]">Nothing urgent right now.</div>
-          ) : (
-            <div className="space-y-2">
-              {[...stats.overdue, ...stats.upcomingCritical].slice(0, 5).map(d => (
-                <div key={d.id} className="flex items-center gap-2 text-sm">
-                  <AlertTriangle className="w-3.5 h-3.5 text-[var(--signal-negative)] shrink-0" />
-                  <span className="flex-1 truncate">{d.title}</span>
-                  <span className="text-xs text-[var(--text-tertiary)] shrink-0">{formatDateOnly(d.due_date, locale, { day: 'numeric', month: 'short' })}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <div className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg p-5">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-sm font-medium">Recent Matters</h3>
-            <Link to="/matters" className="text-xs text-[var(--accent-secondary)] hover:underline">View all</Link>
-          </div>
-          {recentMatters.length === 0 ? (
-            <div className="text-xs text-[var(--text-tertiary)]">No matters opened yet.</div>
-          ) : (
-            <div className="space-y-2">
-              {recentMatters.map(m => (
-                <div key={m.id} className="flex items-center justify-between text-sm">
-                  <div className="min-w-0">
-                    <div className="truncate">{m.title}</div>
-                    <div className="text-xs text-[var(--text-tertiary)] truncate">{clientName(m.client_party_id)}</div>
-                  </div>
-                  <span className="text-xs text-[var(--text-tertiary)] shrink-0 ml-2">{formatDateOnly(m.opened_date, locale, { day: 'numeric', month: 'short' })}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
 
       <AgentLibraryTeaserCard />
     </div>

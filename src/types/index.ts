@@ -74,6 +74,10 @@ export interface Matter {
   closed_date?: string | null;
   description?: string;
   import_batch_id?: string | null;
+  // Soft delete — the column exists in the database (see the
+  // import/undo flow) but was never declared here, so callers had no
+  // way to filter deleted rows without an `as any`.
+  deleted_at?: string | null;
 }
 
 export type DeadlineType = 'statute_of_limitations' | 'filing' | 'court_date' | 'other';
@@ -94,6 +98,10 @@ export interface Deadline {
   // Calendar (see migration 0015) — one-directional, explicit push only,
   // never auto-synced. Null/undefined means "not pushed yet."
   calendar_event_id?: string | null;
+  // Soft delete — the column exists in the database (see the
+  // import/undo flow) but was never declared here, so callers had no
+  // way to filter deleted rows without an `as any`.
+  deleted_at?: string | null;
 }
 
 // Client Portal MVP (see migration 0018) — a firm-side record of who's
