@@ -3,7 +3,9 @@ import { Link } from 'react-router-dom';
 import { useStore } from '../../lib/store';
 import { Mail, Plus } from 'lucide-react';
 import { SendEmailModal } from './SendEmailModal';
+import { CommunicationDetailPanel } from './CommunicationDetail';
 import { findStaleContacts, draftFollowUp } from '../../lib/riskSignals';
+import { MatterCommunication } from '../../types';
 
 // Foundation of "client communication isn't captured anywhere" from the
 // original audit: sending and logging only in this pass — no inbox
@@ -15,6 +17,12 @@ export function CommunicationsScreen() {
   const [matterFilter, setMatterFilter] = useState('all');
   const [showSend, setShowSend] = useState(false);
   const [draftFor, setDraftFor] = useState<{ matterId: string; subject: string; body: string } | null>(null);
+  // Rows truncate the body to two lines so the log stays scannable --
+  // opening one shows the actual full email, reusing the same DetailPanel
+  // pattern the rest of the app uses for "the row is inert but the real
+  // content is genuinely hidden."
+  const [selectedComm, setSelectedComm] = useState<MatterCommunication | null>(null);
+  const [replyFor, setReplyFor] = useState<{ matterId: string; to: string; subject: string } | null>(null);
 
   const matterTitle = (id: string) => matters.find(m => m.id === id)?.title ?? '—';
   const gmailConnected = integrationConnections?.some(c => c.toolkit_slug === 'gmail' && c.status === 'ACTIVE') ?? null;
@@ -61,7 +69,14 @@ export function CommunicationsScreen() {
       ) : (
         <div className="space-y-2">
           {filtered.map(c => (
-            <div key={c.id} className="flex items-start gap-3 p-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
+            <div
+              key={c.id}
+              onClick={() => setSelectedComm(c)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={e => e.key === 'Enter' && setSelectedComm(c)}
+              className="flex items-start gap-3 p-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-secondary)] cursor-pointer hover:border-[var(--border-strong)] transition-colors"
+            >
               <Mail className="w-4 h-4 text-[var(--text-tertiary)] shrink-0 mt-0.5" />
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
@@ -109,6 +124,25 @@ export function CommunicationsScreen() {
       })()}
       {showSend && <SendEmailModal onClose={() => setShowSend(false)} defaultMatterId={matterFilter !== 'all' ? matterFilter : undefined} />}
       {draftFor && <SendEmailModal onClose={() => setDraftFor(null)} defaultMatterId={draftFor.matterId} defaultSubject={draftFor.subject} defaultBody={draftFor.body} />}
+      {replyFor && (
+        <SendEmailModal
+          onClose={() => setReplyFor(null)}
+          defaultMatterId={replyFor.matterId}
+          defaultTo={replyFor.to}
+          defaultSubject={replyFor.subject}
+        />
+      )}
+      {selectedComm && (
+        <CommunicationDetailPanel
+          comm={selectedComm}
+          matterTitle={matterTitle(selectedComm.matter_id)}
+          onReply={() => {
+            setReplyFor({ matterId: selectedComm.matter_id, to: selectedComm.sent_to, subject: selectedComm.subject.startsWith('Re: ') ? selectedComm.subject : `Re: ${selectedComm.subject}` });
+            setSelectedComm(null);
+          }}
+          onClose={() => setSelectedComm(null)}
+        />
+      )}
     </div>
   );
 }
