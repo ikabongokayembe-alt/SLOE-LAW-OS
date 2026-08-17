@@ -245,6 +245,20 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const { profile } = useAuth();
   const { showToast } = useToast();
   const firmId = profile?.firm_id ?? DEMO_TENANT_ID;
+  // Real, live-confirmed bug: AuthProvider's `profile` starts null and
+  // resolves asynchronously (getSession() -> fetchProfile()). Without this
+  // guard, refresh() below fires on mount BEFORE that resolves, `firmId`
+  // falls through to DEMO_TENANT_ID (a dev-data-mode-only id, meaningless
+  // on a real backend), and loadAll() queries the real database for a firm
+  // that doesn't exist there -- 406 on the `firms` .single() call. A
+  // second, correct refresh follows once profile actually loads (firmId
+  // changes -> refresh's identity changes -> the mount effect re-fires),
+  // which is why the screen still ends up populated and this was easy to
+  // mistake for harmless. `hasRealProfile` is a stable boolean (not the
+  // `profile` object itself) so this doesn't refetch on every unrelated
+  // profile object refresh (e.g. a token refresh), only on the actual
+  // null -> loaded transition.
+  const hasRealProfile = isSupabaseConfigured ? !!profile : true;
 
   const [state, setState] = useState<StoreState>({
     loading: true, error: null, hasLoadedOnce: false,
@@ -259,6 +273,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       setState(s => ({ ...s, ...loadMockData(), loading: false, hasLoadedOnce: true, error: null }));
       return;
     }
+    // Wait for the real profile rather than fetching against the
+    // DEMO_TENANT_ID fallback -- see the comment on hasRealProfile above.
+    if (!hasRealProfile) return;
     setState(s => ({ ...s, loading: true }));
     try {
       const data = await loadAll(firmId);
@@ -267,7 +284,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       console.error('[store] refresh failed:', e);
       setState(s => ({ ...s, loading: false, hasLoadedOnce: true, error: e?.message ?? 'load failed' }));
     }
-  }, [firmId]);
+  }, [firmId, hasRealProfile]);
 
   useEffect(() => { refresh(); }, [refresh]);
 
