@@ -4,7 +4,8 @@ import { useAuth } from './auth';
 import { useToast } from './toast';
 import { attorneys as mockAttorneys } from '../data/attorneys';
 import { deadlineRules as mockDeadlineRules } from '../data/deadlineRules';
-import { Attorney, PracticeArea, MatterStage, Party, ConflictCheck, Matter, Deadline, Insight, LawDocument, Firm, DeadlineRule, ImportBatch, TimeEntry, MatterCommunication, AuditLogEntry, ClientInvite, ClientUser, SignatureRequest, MatterParty, PartyRelationship } from '../types';
+import { Attorney, PracticeArea, MatterStage, Party, ConflictCheck, Matter, Deadline, Insight, LawDocument, Firm, DeadlineRule, ImportBatch, TimeEntry, MatterCommunication, AuditLogEntry, ClientInvite, ClientUser, SignatureRequest, MatterParty, MatterPartyRole, PartyRelationship } from '../types';
+import { analyseConflict } from './conflictSignals';
 
 interface StoreState {
   loading: boolean;
@@ -56,6 +57,8 @@ interface StoreActions {
   runConflictCheck: (searchedName: string, matterId: string | null) => Promise<ConflictCheck | null>;
   clearConflictCheck: (id: string, waived: boolean, notes?: string) => Promise<void>;
   addMatter: (matter: Omit<Matter, 'id'>) => Promise<Matter | null>;
+  addMatterParty: (matterId: string, partyId: string, role: MatterPartyRole) => Promise<{ error?: string }>;
+  removeMatterParty: (matterId: string, partyId: string, role: MatterPartyRole) => Promise<void>;
   updateMatterStage: (matterId: string, stageId: string) => Promise<{ error?: string }>;
   updateMatterAttorney: (matterId: string, attorneyId: string) => Promise<void>;
   linkMatterConflictCheck: (matterId: string, conflictCheckId: string) => Promise<void>;
@@ -343,11 +346,18 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       p.name.toLowerCase().includes(nameLower) || nameLower.includes(p.name.toLowerCase()) ||
       p.aliases.some(a => a.toLowerCase().includes(nameLower) || nameLower.includes(a.toLowerCase()))
     );
+    // Computed once, here, and frozen onto the row (see migration 0023) --
+    // never recomputed when a past check is reopened from Recent Checks.
+    // analyseConflict also walks matter_parties roles and
+    // party_relationships edges, both of which can change after the fact,
+    // so recomputing later would silently answer a different question
+    // than "what did this check find at the time".
+    const signals = analyseConflict(searchedName, state.parties, state.matters, state.matterParties, state.partyRelationships);
     if (!isSupabaseConfigured) {
       const cc: ConflictCheck = {
         id: `local-cc-${Date.now()}`, matter_id: matterId, searched_name: searchedName,
         matched_party_ids: matches.map(m => m.id), status: matches.length > 0 ? 'flagged' : 'cleared',
-        created_at: new Date().toISOString(),
+        created_at: new Date().toISOString(), signals,
       };
       setState(s => ({ ...s, conflictChecks: [cc, ...s.conflictChecks] }));
       return cc;
@@ -355,14 +365,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     const status = matches.length > 0 ? 'flagged' : 'cleared';
     const { data, error } = await supabase.from('conflict_checks').insert({
       firm_id: firmId, matter_id: matterId, searched_name: searchedName,
-      matched_party_ids: matches.map(m => m.id), status,
+      matched_party_ids: matches.map(m => m.id), status, signals,
     }).select().single();
     if (error || !data) { showToast('error', "Couldn't run the conflict check."); return null; }
     setState(s => ({ ...s, conflictChecks: [data as ConflictCheck, ...s.conflictChecks] }));
     if (matches.length > 0) showToast('error', `${matches.length} potential match${matches.length === 1 ? '' : 'es'} found — review before proceeding.`);
     else showToast('success', 'No conflicts found.');
     return data as ConflictCheck;
-  }, [firmId, state.parties]);
+  }, [firmId, state.parties, state.matters, state.matterParties, state.partyRelationships]);
 
   const clearConflictCheck = useCallback(async (id: string, waived: boolean, notes?: string) => {
     const patch = { status: waived ? 'waived' as const : 'cleared' as const, cleared_at: new Date().toISOString(), notes };
@@ -386,6 +396,35 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     showToast('success', 'Matter opened.');
     return data as Matter;
   }, [firmId]);
+
+  // Attaches an additional party (opposing, witness, co-counsel, etc.) to
+  // a matter beyond its primary client -- writes into matter_parties (see
+  // migration 0002), a table the store has read since conflictSignals.ts
+  // started walking it but that had no writer anywhere in the app until
+  // the matter detail view.
+  const addMatterParty = useCallback(async (matterId: string, partyId: string, role: MatterPartyRole) => {
+    const mp: MatterParty = { matter_id: matterId, party_id: partyId, role_in_matter: role };
+    if (!isSupabaseConfigured) {
+      setState(s => (s.matterParties.some(x => x.matter_id === matterId && x.party_id === partyId && x.role_in_matter === role) ? s : { ...s, matterParties: [...s.matterParties, mp] }));
+      return {};
+    }
+    const { error } = await supabase.from('matter_parties').insert(mp);
+    if (error) {
+      if (error.code === '23505') return {}; // already linked with this exact role -- not an error
+      console.error('[store] addMatterParty failed:', error);
+      showToast('error', "Couldn't add that party — try again.");
+      return { error: error.message };
+    }
+    setState(s => ({ ...s, matterParties: [...s.matterParties, mp] }));
+    return {};
+  }, []);
+
+  const removeMatterParty = useCallback(async (matterId: string, partyId: string, role: MatterPartyRole) => {
+    setState(s => ({ ...s, matterParties: s.matterParties.filter(x => !(x.matter_id === matterId && x.party_id === partyId && x.role_in_matter === role)) }));
+    if (!isSupabaseConfigured) return;
+    const { error } = await supabase.from('matter_parties').delete().eq('matter_id', matterId).eq('party_id', partyId).eq('role_in_matter', role);
+    if (error) { console.error('[store] removeMatterParty failed:', error); showToast('error', "Couldn't remove that party — try again."); }
+  }, []);
 
   // Stage changes go through the real conflict-check gate at the database
   // level (see migration 0002) — this can genuinely fail, and the UI must
@@ -917,7 +956,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   return (
     <StoreContext.Provider value={{
       ...state,
-      refresh, updateFirm, addPracticeArea, updatePracticeArea, addParty, runConflictCheck, clearConflictCheck, addMatter, updateMatterStage, updateMatterAttorney, linkMatterConflictCheck, addDeadline, updateDeadline, addInsights, uploadDocument, deleteDocument, requestAgent, removeAgentRequest, commitImportBatch, removeImportBatch, addTimeEntry, updateTimeEntry, deleteTimeEntry, refreshIntegrations, pushDeadlineToCalendar, sendMatterCommunication, inviteClientToPortal, setDocumentClientVisible, sendForSignature, refreshSignatureStatus, cancelSignatureRequest,
+      refresh, updateFirm, addPracticeArea, updatePracticeArea, addParty, runConflictCheck, clearConflictCheck, addMatter, addMatterParty, removeMatterParty, updateMatterStage, updateMatterAttorney, linkMatterConflictCheck, addDeadline, updateDeadline, addInsights, uploadDocument, deleteDocument, requestAgent, removeAgentRequest, commitImportBatch, removeImportBatch, addTimeEntry, updateTimeEntry, deleteTimeEntry, refreshIntegrations, pushDeadlineToCalendar, sendMatterCommunication, inviteClientToPortal, setDocumentClientVisible, sendForSignature, refreshSignatureStatus, cancelSignatureRequest,
     }}>
       {children}
     </StoreContext.Provider>

@@ -1,0 +1,14 @@
+-- Universal detail-view work: Recent Checks only ever rendered
+-- searched_name + status. The rich result (analyseConflict()'s signals --
+-- which party matched, the path/reasoning, and any adverse role) existed
+-- only as local component state in PartiesScreen right after a search,
+-- then was discarded. matched_party_ids alone isn't enough to reconstruct
+-- it later: analyseConflict also walks matter_parties roles and
+-- party_relationships edges, both of which can change after the check was
+-- run (a role added, a relationship recorded) -- recomputing later would
+-- silently answer a different question than "what did this check find".
+--
+-- signals freezes analyseConflict()'s actual output at check time, so
+-- reopening a past check from Recent Checks always shows the exact
+-- original finding, not a re-run against however the data looks today.
+alter table conflict_checks add column if not exists signals jsonb not null default '[]'::jsonb;

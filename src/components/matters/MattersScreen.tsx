@@ -4,6 +4,8 @@ import { findBottlenecks } from '../../lib/riskSignals';
 import { useMemo as useMemoRS } from 'react';
 import { NewMatterModal } from './NewMatterModal';
 import { InviteClientModal } from './InviteClientModal';
+import { MatterDetailPanel } from './MatterDetailPanel';
+import { Matter } from '../../types';
 import { AlertTriangle, Plus, ShieldCheck, UserPlus, CheckCircle2, Clock } from 'lucide-react';
 
 export function MattersScreen() {
@@ -13,6 +15,8 @@ export function MattersScreen() {
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [invitingPartyId, setInvitingPartyId] = useState<string | null>(null);
+  const [openMatterId, setOpenMatterId] = useState<string | null>(null);
+  const openMatter: Matter | null = matters.find(m => m.id === openMatterId) ?? null;
 
   // Portal status per party — 'active' (client_users row exists), 'pending'
   // (an unaccepted, unexpired client_invites row exists), or null (never
@@ -145,13 +149,21 @@ export function MattersScreen() {
                   stageMatters.map(m => {
                     const eligible = stage.is_initial && !m.conflict_check_id;
                     return (
-                      <div key={m.id} className={`bg-[var(--bg-secondary)] border rounded-lg p-3 transition-colors ${selected.has(m.id) ? 'border-[var(--accent-secondary)]' : 'border-[var(--border-subtle)]'}`}>
+                      <div
+                        key={m.id}
+                        onClick={() => setOpenMatterId(m.id)}
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={e => e.key === 'Enter' && setOpenMatterId(m.id)}
+                        className={`bg-[var(--bg-secondary)] border rounded-lg p-3 transition-colors cursor-pointer hover:border-[var(--border-strong)] ${selected.has(m.id) ? 'border-[var(--accent-secondary)]' : 'border-[var(--border-subtle)]'}`}
+                      >
                         <div className="flex items-start gap-2 mb-1">
                           {eligible && (
                             <input
                               type="checkbox"
                               checked={selected.has(m.id)}
                               onChange={() => toggleSelected(m.id)}
+                              onClick={e => e.stopPropagation()}
                               disabled={running}
                               className="mt-0.5 shrink-0"
                               aria-label={`Select ${m.title} for bulk conflict check`}
@@ -190,7 +202,7 @@ export function MattersScreen() {
                               </span>
                             ) : (
                               <button
-                                onClick={() => setInvitingPartyId(m.client_party_id)}
+                                onClick={e => { e.stopPropagation(); setInvitingPartyId(m.client_party_id); }}
                                 className="flex items-center gap-1 text-[10px] text-[var(--accent-secondary)] hover:underline"
                               >
                                 <UserPlus className="w-3 h-3" /> Invite to Portal
@@ -217,6 +229,7 @@ export function MattersScreen() {
           onClose={() => setInvitingPartyId(null)}
         />
       )}
+      {openMatter && <MatterDetailPanel matter={openMatter} onClose={() => setOpenMatterId(null)} />}
     </div>
   );
 }

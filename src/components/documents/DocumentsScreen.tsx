@@ -5,6 +5,7 @@ import { useAuth } from '../../lib/auth';
 import { supabase } from '../../lib/supabase';
 import { FileText, Upload, Trash2, Download, History, Search, X, Eye, EyeOff, PenLine, RefreshCw } from 'lucide-react';
 import { LawDocument, DocumentSearchResult, SignatureRequest } from '../../types';
+import { DocumentPreviewPanel } from './DocumentPreview';
 
 // search_documents' snippet uses plain-text §§B§§/§§E§§ markers, not
 // HTML tags (see migration 0017's comment on why: extracted_text is
@@ -50,6 +51,7 @@ export function DocumentsScreen() {
   const [uploadTarget, setUploadTarget] = useState<string>('');
   const [uploading, setUploading] = useState(false);
   const [pendingUpload, setPendingUpload] = useState<{ file: File; matterId: string | null; existing: LawDocument } | null>(null);
+  const [previewDoc, setPreviewDoc] = useState<LawDocument | null>(null);
 
   // Content search — filenames AND extracted text, via the
   // search_documents Postgres function (migration 0017), not client-side
@@ -86,6 +88,13 @@ export function DocumentsScreen() {
     [documents, matterFilter]
   );
   const matterTitle = (id: string | null) => matters.find(m => m.id === id)?.title ?? 'Unfiled';
+  // Firm-relative, filename-derived -- see findDocumentGaps. Computed once
+  // here (not just inside the banner IIFE below) so the document preview
+  // panel can also surface a matter's gap finding inline with the
+  // specific document it's about, per the companion doc-gap-intelligence
+  // task.
+  const documentGaps = useMemo(() => findDocumentGaps(matters, documents), [matters, documents]);
+  const gapHintFor = (matterId: string | null) => matterId ? documentGaps.find(g => g.matter.id === matterId)?.detail : undefined;
 
   // Group by version chain, most-recent-first within a group, groups
   // themselves ordered by their most recent member's upload time.
@@ -170,7 +179,14 @@ export function DocumentsScreen() {
   };
 
   const renderRow = (d: LawDocument, isSecondary: boolean) => (
-    <div key={d.id} className={`flex items-center gap-3 ${isSecondary ? 'py-2 pl-8 pr-3 opacity-60' : 'p-3'}`}>
+    <div
+      key={d.id}
+      onClick={() => setPreviewDoc(d)}
+      role="button"
+      tabIndex={0}
+      onKeyDown={e => e.key === 'Enter' && setPreviewDoc(d)}
+      className={`flex items-center gap-3 cursor-pointer hover:bg-[var(--bg-tertiary)]/40 transition-colors ${isSecondary ? 'py-2 pl-8 pr-3 opacity-60' : 'p-3'}`}
+    >
       <div className={`rounded-lg bg-[var(--bg-tertiary)] flex items-center justify-center shrink-0 ${isSecondary ? 'w-7 h-7' : 'w-9 h-9'}`}>
         <FileText className={isSecondary ? 'w-3.5 h-3.5' : 'w-4 h-4'} />
       </div>
@@ -191,7 +207,7 @@ export function DocumentsScreen() {
       </div>
       {d.matter_id && (
         <button
-          onClick={() => setDocumentClientVisible(d.id, !d.client_visible)}
+          onClick={e => { e.stopPropagation(); setDocumentClientVisible(d.id, !d.client_visible); }}
           title={d.client_visible ? 'Shared with the client — click to stop sharing' : 'Not shared with the client — click to share on their portal'}
           className={`w-8 h-8 flex items-center justify-center transition-colors ${d.client_visible ? 'text-[var(--signal-positive)] hover:text-[var(--signal-negative)]' : 'text-[var(--text-tertiary)] hover:text-[var(--text-primary)]'}`}
         >
@@ -207,7 +223,7 @@ export function DocumentsScreen() {
         if (sig && sig.status === 'sent') {
           return (
             <button
-              onClick={() => handleRefreshSignature(sig.id)}
+              onClick={e => { e.stopPropagation(); handleRefreshSignature(sig.id); }}
               disabled={refreshingSig === sig.id}
               title={`Out for signature with ${sig.recipient_email} — click to check status`}
               className="w-8 h-8 flex items-center justify-center text-[var(--signal-warning)] hover:text-[var(--text-primary)] transition-colors disabled:opacity-40"
@@ -218,7 +234,7 @@ export function DocumentsScreen() {
         }
         return (
           <button
-            onClick={() => { setSignTarget(d); setSignEmail(''); setSignName(''); }}
+            onClick={e => { e.stopPropagation(); setSignTarget(d); setSignEmail(''); setSignName(''); }}
             title={sig?.status === 'signed' ? 'Already signed — send again for a new signature' : 'Send this document for e-signature'}
             className="w-8 h-8 flex items-center justify-center text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors"
           >
@@ -226,10 +242,10 @@ export function DocumentsScreen() {
           </button>
         );
       })()}
-      <button onClick={() => handleDownload(d.storage_path, d.file_name)} className="w-8 h-8 flex items-center justify-center text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors">
+      <button onClick={e => { e.stopPropagation(); handleDownload(d.storage_path, d.file_name); }} className="w-8 h-8 flex items-center justify-center text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors">
         <Download className="w-4 h-4" />
       </button>
-      <button onClick={() => deleteDocument(d.id, d.storage_path)} className="w-8 h-8 flex items-center justify-center text-[var(--text-tertiary)] hover:text-[var(--signal-negative)] transition-colors">
+      <button onClick={e => { e.stopPropagation(); deleteDocument(d.id, d.storage_path); }} className="w-8 h-8 flex items-center justify-center text-[var(--text-tertiary)] hover:text-[var(--signal-negative)] transition-colors">
         <Trash2 className="w-4 h-4" />
       </button>
     </div>
@@ -241,9 +257,7 @@ export function DocumentsScreen() {
       <p className="text-sm text-[var(--text-secondary)] mb-6">Every file attached to a matter, in one place.</p>
 
 {(() => {
-        // Firm-relative, filename-derived. Says nothing when this firm
-        // has not established a pattern -- see findDocumentGaps.
-        const gaps = findDocumentGaps(matters, documents).slice(0, 3);
+        const gaps = documentGaps.slice(0, 3);
         if (gaps.length === 0) return null;
         return (
           <div className="mb-6 space-y-2">
@@ -376,7 +390,14 @@ export function DocumentsScreen() {
         ) : (
           <div className="space-y-2">
             {searchResults.map(r => (
-              <div key={r.id} className="p-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
+              <div
+                key={r.id}
+                onClick={() => { const full = documents.find(d => d.id === r.id); if (full) setPreviewDoc(full); }}
+                role="button"
+                tabIndex={0}
+                onKeyDown={e => { if (e.key === 'Enter') { const full = documents.find(d => d.id === r.id); if (full) setPreviewDoc(full); } }}
+                className="p-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-secondary)] cursor-pointer hover:border-[var(--border-strong)] transition-colors"
+              >
                 <div className="flex items-center gap-3">
                   <div className="w-9 h-9 rounded-lg bg-[var(--bg-tertiary)] flex items-center justify-center shrink-0">
                     <FileText className="w-4 h-4" />
@@ -385,7 +406,7 @@ export function DocumentsScreen() {
                     <div className="text-sm font-medium truncate">{r.file_name}</div>
                     <div className="text-xs text-[var(--text-tertiary)]">{matterTitle(r.matter_id)}</div>
                   </div>
-                  <button onClick={() => handleDownload(r.storage_path, r.file_name)} className="w-8 h-8 flex items-center justify-center text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors shrink-0">
+                  <button onClick={e => { e.stopPropagation(); handleDownload(r.storage_path, r.file_name); }} className="w-8 h-8 flex items-center justify-center text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors shrink-0">
                     <Download className="w-4 h-4" />
                   </button>
                 </div>
@@ -434,6 +455,17 @@ export function DocumentsScreen() {
             </div>
           )}
         </>
+      )}
+
+      {previewDoc && (
+        <DocumentPreviewPanel
+          doc={previewDoc}
+          matterTitle={matterTitle(previewDoc.matter_id)}
+          onClose={() => setPreviewDoc(null)}
+          onToggleClientVisible={() => setDocumentClientVisible(previewDoc.id, !previewDoc.client_visible)}
+          onDownload={() => handleDownload(previewDoc.storage_path, previewDoc.file_name)}
+          gapHint={gapHintFor(previewDoc.matter_id)}
+        />
       )}
     </div>
   );

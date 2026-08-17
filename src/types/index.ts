@@ -47,10 +47,12 @@ export interface Party {
 // This is what makes "your prospective client is the opposing party on
 // another live matter" detectable — the classic conflict the schema
 // comment describes but which nothing has ever queried until now.
+export type MatterPartyRole = 'client' | 'opposing' | 'witness' | 'co_counsel' | 'other';
+
 export interface MatterParty {
   matter_id: string;
   party_id: string;
-  role_in_matter: 'client' | 'opposing' | 'witness' | 'co_counsel' | 'other';
+  role_in_matter: MatterPartyRole;
 }
 
 // Directed edge: <party_id> is the <relationship> of <related_party_id>
@@ -78,6 +80,13 @@ export interface ConflictCheck {
   cleared_at?: string;
   notes?: string;
   created_at: string;
+  // analyseConflict()'s actual output, frozen at check time (see migration
+  // 0023) -- never recomputed when a past check is reopened. Optional only
+  // because rows written before that migration have none. ConflictSignal
+  // lives in lib/conflictSignals.ts, not here, since it is a computed
+  // shape rather than a table row -- imported type-only to avoid a
+  // runtime circular import back into this file.
+  signals?: import('../lib/conflictSignals').ConflictSignal[];
 }
 
 export type BillingType = 'hourly' | 'contingency' | 'flat_fee' | 'retainer';
