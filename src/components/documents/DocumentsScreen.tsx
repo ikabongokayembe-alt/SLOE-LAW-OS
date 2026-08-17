@@ -3,7 +3,7 @@ import { useStore } from '../../lib/store';
 import { findDocumentGaps } from '../../lib/riskSignals';
 import { useAuth } from '../../lib/auth';
 import { supabase } from '../../lib/supabase';
-import { FileText, Upload, Trash2, Download, History, Search, X, Eye, EyeOff, PenLine, RefreshCw } from 'lucide-react';
+import { FileText, Upload, Trash2, Download, History, Search, X, Eye, EyeOff, PenLine, RefreshCw, AlertTriangle } from 'lucide-react';
 import { LawDocument, DocumentSearchResult, SignatureRequest } from '../../types';
 import { DocumentPreviewPanel } from './DocumentPreview';
 
@@ -262,10 +262,20 @@ export function DocumentsScreen() {
         return (
           <div className="mb-6 space-y-2">
             {gaps.map(g => (
-              <div key={g.matter.id} className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg px-4 py-3">
-                <div className="text-sm font-medium">{g.matter.title}</div>
+              // Clicking a gap finding filters straight to the matter it's
+              // about, rather than just naming it in a banner divorced
+              // from the actual document list -- "attached to the
+              // specific matter/document group it's about."
+              <button
+                key={g.matter.id}
+                onClick={() => { setSearchQuery(''); setMatterFilter(g.matter.id); }}
+                className="w-full text-left bg-[var(--bg-secondary)] border border-[var(--signal-warning)]/30 rounded-lg px-4 py-3 hover:border-[var(--signal-warning)]/60 transition-colors"
+              >
+                <div className="flex items-center gap-1.5 text-sm font-medium">
+                  <AlertTriangle className="w-3.5 h-3.5 text-[var(--signal-warning)] shrink-0" /> {g.matter.title}
+                </div>
                 <div className="text-xs text-[var(--text-tertiary)] mt-0.5">{g.detail}</div>
-              </div>
+              </button>
             ))}
           </div>
         );
@@ -441,17 +451,36 @@ export function DocumentsScreen() {
             <div className="text-sm text-[var(--text-tertiary)] py-8 text-center">No documents yet.</div>
           ) : (
             <div className="space-y-2">
-              {groups.map(g => (
-                <div key={g.key} className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg divide-y divide-[var(--border-subtle)]/60">
-                  {renderRow(g.all[0], false)}
-                  {g.all.length > 1 && (
-                    <div className="flex items-center gap-1.5 px-3 pt-2 text-[10px] uppercase tracking-wider text-[var(--text-tertiary)]">
-                      <History className="w-3 h-3" /> {g.all.length - 1} earlier version{g.all.length - 1 === 1 ? '' : 's'}
+              {(() => {
+                // Also flag the gap directly on the specific document
+                // group it's about, once per matter -- the top banner
+                // says "this matter has a gap," this says "here is that
+                // matter's actual document list." Shown once, on the
+                // first (most recent) group for that matter, not
+                // repeated on every group of theirs.
+                const flaggedMatters = new Set<string>();
+                return groups.map(g => {
+                  const matterId = g.all[0].matter_id;
+                  const gap = matterId && !flaggedMatters.has(matterId) ? documentGaps.find(dg => dg.matter.id === matterId) : undefined;
+                  if (gap) flaggedMatters.add(matterId!);
+                  return (
+                    <div key={g.key} className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg divide-y divide-[var(--border-subtle)]/60">
+                      {gap && (
+                        <div className="flex items-center gap-1.5 px-3 py-2 text-[11px] text-[var(--signal-warning)] bg-[var(--signal-warning)]/5">
+                          <AlertTriangle className="w-3 h-3 shrink-0" /> {gap.detail}
+                        </div>
+                      )}
+                      {renderRow(g.all[0], false)}
+                      {g.all.length > 1 && (
+                        <div className="flex items-center gap-1.5 px-3 pt-2 text-[10px] uppercase tracking-wider text-[var(--text-tertiary)]">
+                          <History className="w-3 h-3" /> {g.all.length - 1} earlier version{g.all.length - 1 === 1 ? '' : 's'}
+                        </div>
+                      )}
+                      {g.all.slice(1).map(d => renderRow(d, true))}
                     </div>
-                  )}
-                  {g.all.slice(1).map(d => renderRow(d, true))}
-                </div>
-              ))}
+                  );
+                });
+              })()}
             </div>
           )}
         </>

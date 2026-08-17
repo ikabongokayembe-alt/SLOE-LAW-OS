@@ -292,6 +292,41 @@ export function findDocumentGaps(matters: Matter[], documents: LawDocument[]): D
   return out;
 }
 
+// Below this many billable minutes / this many days since the oldest
+// unbilled entry, there's nothing worth flagging -- matches
+// urgentActions.ts's original thresholds exactly (this is a straight
+// extraction, not a new rule).
+const UNBILLED_MIN_MINUTES = 120;
+const UNBILLED_MIN_AGE_DAYS = 30;
+
+export interface UnbilledMatter {
+  matter: Matter;
+  minutes: number;
+  ageDays: number;
+}
+
+// Active matters carrying billable time that's sat unbilled for a while --
+// "the most recoverable revenue in a small practice" (see
+// urgentActions.ts's UrgentAction.reasoning for this exact framing, which
+// callers should reuse verbatim rather than restate). Extracted out of
+// buildUrgentActions so Command Center's ranked card and the Time
+// screen's own banner read from the same computation, not two versions
+// of the same rule that could drift apart.
+export function findUnbilledMatters(matters: Matter[], timeEntries: TimeEntry[], now = Date.now()): UnbilledMatter[] {
+  const active = matters.filter(m => m.status === 'active' && !m.deleted_at);
+  const out: UnbilledMatter[] = [];
+  for (const m of active) {
+    const entries = timeEntries.filter(t => t.matter_id === m.id && t.billable);
+    if (entries.length === 0) continue;
+    const minutes = entries.reduce((s, t) => s + (t.duration_minutes || 0), 0);
+    const oldest = entries.map(t => new Date(t.date).getTime()).sort((a, b) => a - b)[0];
+    const ageDays = Math.round((now - oldest) / DAY);
+    if (minutes < UNBILLED_MIN_MINUTES || ageDays < UNBILLED_MIN_AGE_DAYS) continue;
+    out.push({ matter: m, minutes, ageDays });
+  }
+  return out.sort((a, b) => b.minutes - a.minutes);
+}
+
 export interface StaleMatterContact {
   matter: Matter;
   daysSilent: number | null;

@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react';
 import { useStore } from '../../lib/store';
-import { Clock, Plus, Download, Pencil, Trash2 } from 'lucide-react';
+import { Clock, Plus, Download, Pencil, Trash2, Banknote } from 'lucide-react';
 import { formatDateOnly } from '../../lib/dates';
 import { computeAmount, formatAmount, formatHours } from '../../lib/timeEntries';
+import { findUnbilledMatters } from '../../lib/riskSignals';
 import { toCsv, downloadCsv } from '../../lib/csv';
 import { LogTimeModal } from './LogTimeModal';
 import { TimeEntry } from '../../types';
@@ -23,6 +24,13 @@ export function TimeEntriesScreen() {
 
   const matterTitle = (id: string) => matters.find(m => m.id === id)?.title ?? '—';
   const attorneyName = (id: string | null) => attorneys.find(a => a.id === id)?.name ?? 'Unassigned';
+
+  // Same detector Command Center's "Bill the logged time" card uses (see
+  // riskSignals.ts's findUnbilledMatters, extracted out of
+  // urgentActions.ts so both surfaces read one computation) -- billable
+  // time that's sat unrecorded-as-invoiced for a while. Shown here where
+  // billing actually happens, not just as a Command Center card.
+  const unbilled = useMemo(() => findUnbilledMatters(matters, timeEntries), [matters, timeEntries]);
 
   const filtered = useMemo(() => {
     return timeEntries
@@ -91,6 +99,27 @@ export function TimeEntriesScreen() {
           <Plus className="w-4 h-4" /> Log Time
         </button>
       </div>
+
+      {unbilled.length > 0 && (
+        <div className="mb-6 space-y-2">
+          {unbilled.slice(0, 3).map(u => (
+            // Clicking filters straight to that matter's entries, same
+            // click-to-filter affordance as Documents' gap banner.
+            <button
+              key={u.matter.id}
+              onClick={() => setMatterFilter(u.matter.id)}
+              className="w-full text-left bg-[var(--bg-secondary)] border border-[var(--accent-primary)]/30 rounded-lg px-4 py-3 hover:border-[var(--accent-primary)]/60 transition-colors"
+            >
+              <div className="flex items-center gap-1.5 text-sm font-medium">
+                <Banknote className="w-3.5 h-3.5 text-[var(--accent-primary)] shrink-0" /> {u.matter.title}
+              </div>
+              <div className="text-xs text-[var(--text-tertiary)] mt-0.5">
+                {(u.minutes / 60).toFixed(1)} billable hours recorded, oldest entry {u.ageDays} day{u.ageDays === 1 ? '' : 's'} old — not yet invoiced.
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="flex flex-wrap items-end gap-3 mb-4">
         <div>

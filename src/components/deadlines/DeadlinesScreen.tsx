@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useStore } from '../../lib/store';
+import { useToast } from '../../lib/toast';
 import { assessDeadlineRisk } from '../../lib/riskSignals';
-import { AlertTriangle, Clock, CheckCircle2, CalendarPlus, CalendarCheck2, ChevronLeft, ChevronRight } from 'lucide-react';
+import { AlertTriangle, Clock, CheckCircle2, CalendarPlus, CalendarCheck2, ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { formatDateOnly, parseDateOnly } from '../../lib/dates';
+import { LogTimeModal } from '../time/LogTimeModal';
+import { Deadline } from '../../types';
 
 const TYPE_LABELS: Record<string, string> = {
   statute_of_limitations: 'Statute of Limitations', filing: 'Filing', court_date: 'Court Date', other: 'Other',
@@ -21,8 +24,16 @@ function daysUntil(dateOnlyString: string): number {
 
 export function DeadlinesScreen() {
   const { deadlines, matters, updateDeadline, firm, integrationConnections, pushDeadlineToCalendar, timeEntries, documents } = useStore();
+  const { showToast } = useToast();
   const locale = firm?.locale || 'en-US';
   const [pushingId, setPushingId] = useState<string | null>(null);
+  // Real feedback for "Mark done", not a silent status flip -- a toast
+  // naming what actually changed, plus an optional, dismissible nudge
+  // toward the obvious next step on that SAME matter. Only ever tracks
+  // the most recently completed deadline; marking another replaces it
+  // rather than stacking prompts.
+  const [justCompletedId, setJustCompletedId] = useState<string | null>(null);
+  const [logTimeFor, setLogTimeFor] = useState<Deadline | null>(null);
 
   // Filters — same shape/pattern as TimeEntriesScreen's matter+date-range
   // filter bar. Real volume (151 rows, one long list, sort-by-due-date
@@ -35,7 +46,19 @@ export function DeadlinesScreen() {
   const [page, setPage] = useState(1);
 
   const matterTitle = (id: string | null) => matters.find(m => m.id === id)?.title ?? '—';
-  const markComplete = (id: string) => updateDeadline(id, { status: 'completed' });
+
+  // "Done" here means: status flips to 'completed', which is the exact
+  // condition assessDeadlineRisk and buildUrgentActions both gate on --
+  // a completed deadline stops producing "at risk"/"watch" lines on this
+  // screen and drops out of Command Center's overdue/no-prep cards on its
+  // own, with no separate cleanup step. That's real, not implied, so the
+  // toast says it plainly instead of leaving it to be inferred from a
+  // checkmark.
+  const markComplete = async (d: Deadline) => {
+    await updateDeadline(d.id, { status: 'completed' });
+    showToast('success', `"${d.title}" marked done — removed from at-risk tracking and Command Center.`);
+    setJustCompletedId(d.id);
+  };
 
   const calendarConnected = integrationConnections?.some(c => c.toolkit_slug === 'googlecalendar' && c.status === 'ACTIVE') ?? null;
 
@@ -203,12 +226,31 @@ export function DeadlinesScreen() {
                         </button>
                       ) : null}
                       {d.status !== 'completed' && (
-                        <button onClick={() => markComplete(d.id)} className="text-xs px-2.5 py-1.5 border border-[var(--border-subtle)] rounded hover:bg-[var(--bg-tertiary)] transition-colors whitespace-nowrap">
+                        <button onClick={() => markComplete(d)} className="text-xs px-2.5 py-1.5 border border-[var(--border-subtle)] rounded hover:bg-[var(--bg-tertiary)] transition-colors whitespace-nowrap">
                           Mark done
                         </button>
                       )}
                     </div>
                   </div>
+                  {/* Optional, one-click next step -- never mandatory.
+                      Only appears right after this specific deadline was
+                      marked done, and only when there's a matter to log
+                      time against; dismissible with no consequence. */}
+                  {justCompletedId === d.id && d.matter_id && (
+                    <div className="flex items-center gap-2 pt-2 mt-1 border-t border-[var(--border-subtle)] text-xs text-[var(--text-secondary)]">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-[var(--signal-positive)] shrink-0" />
+                      <span className="flex-1">Log time against {matterTitle(d.matter_id)}?</span>
+                      <button
+                        onClick={() => setLogTimeFor(d)}
+                        className="px-2 py-1 text-xs font-medium bg-[var(--text-primary)] text-[var(--bg-primary)] rounded hover:opacity-90 transition-opacity"
+                      >
+                        Log time
+                      </button>
+                      <button onClick={() => setJustCompletedId(null)} className="text-[var(--text-tertiary)] hover:text-[var(--text-primary)]" aria-label="Dismiss">
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -238,6 +280,13 @@ export function DeadlinesScreen() {
             </div>
           )}
         </>
+      )}
+
+      {logTimeFor && (
+        <LogTimeModal
+          onClose={() => { setLogTimeFor(null); setJustCompletedId(null); }}
+          defaultMatterId={logTimeFor.matter_id ?? undefined}
+        />
       )}
     </div>
   );

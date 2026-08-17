@@ -5,6 +5,7 @@ import { useMemo as useMemoRS } from 'react';
 import { NewMatterModal } from './NewMatterModal';
 import { InviteClientModal } from './InviteClientModal';
 import { MatterDetailPanel } from './MatterDetailPanel';
+import { runBulkConflictChecks } from '../../lib/bulkConflictCheck';
 import { Matter } from '../../types';
 import { AlertTriangle, Plus, ShieldCheck, UserPlus, CheckCircle2, Clock } from 'lucide-react';
 
@@ -62,28 +63,15 @@ export function MattersScreen() {
   const selectAllEligible = () => setSelected(new Set(eligibleIds));
   const clearSelection = () => setSelected(new Set());
 
-  const runBulkConflictChecks = async () => {
+  const runSelectedConflictChecks = async () => {
     const ids = Array.from(selected);
     if (ids.length === 0) return;
     setRunning(true);
     setProgress({ done: 0, total: ids.length });
-    let cleared = 0, flagged = 0, skipped = 0;
-    for (const id of ids) {
-      const matter = matters.find(m => m.id === id);
-      const name = matter ? clientName(matter.client_party_id) : null;
-      if (!matter || !name || name === '—') {
-        skipped++;
-      } else {
-        const result = await runConflictCheck(name, matter.id);
-        if (result) {
-          await linkMatterConflictCheck(matter.id, result.id);
-          if (result.status === 'flagged') flagged++; else cleared++;
-        } else {
-          skipped++;
-        }
-      }
-      setProgress(p => p ? { ...p, done: p.done + 1 } : p);
-    }
+    await runBulkConflictChecks(ids, {
+      matters, parties, runConflictCheck, linkMatterConflictCheck,
+      onProgress: (done, total) => setProgress({ done, total }),
+    });
     setRunning(false);
     setProgress(null);
     clearSelection();
@@ -116,7 +104,7 @@ export function MattersScreen() {
             <div className="flex items-center gap-2 ml-auto">
               <button onClick={clearSelection} disabled={running} className="text-[var(--text-tertiary)] hover:text-[var(--text-primary)] disabled:opacity-40">Clear</button>
               <button
-                onClick={runBulkConflictChecks}
+                onClick={runSelectedConflictChecks}
                 disabled={running}
                 className="h-7 px-3 flex items-center gap-1.5 font-medium bg-[var(--text-primary)] text-[var(--bg-primary)] rounded hover:opacity-90 transition-opacity disabled:opacity-60"
               >

@@ -30,6 +30,7 @@
 // ─────────────────────────────────────────────────────────────────────
 
 import { Matter, Deadline, LawDocument, TimeEntry, MatterCommunication, ConflictCheck, Party } from '../types';
+import { findUnbilledMatters } from './riskSignals';
 
 // Ranked by the consequence a solo practitioner actually carries, not by
 // date proximity. A missed filing is career risk; a quiet client is
@@ -199,21 +200,16 @@ export function buildUrgentActions(input: ActionInputs, now = Date.now()): Urgen
   }
 
   // ── 5. Unbilled work — revenue risk ────────────────────────────────
-  for (const m of activeMatters) {
-    const entries = timeEntries.filter(t => t.matter_id === m.id && t.billable);
-    if (entries.length === 0) continue;
-    const minutes = entries.reduce((s, t) => s + (t.duration_minutes || 0), 0);
-    const oldest = entries
-      .map(t => new Date(t.date).getTime())
-      .sort((a, b) => a - b)[0];
-    const ageDays = Math.round((now - oldest) / DAY);
-    if (minutes < 120 || ageDays < 30) continue;
+  // Detection lives in riskSignals.ts's findUnbilledMatters -- the Time
+  // screen's own banner reads from the exact same function, so the two
+  // surfaces can't disagree about which matters qualify.
+  for (const u of findUnbilledMatters(matters, timeEntries, now)) {
     out.push({
-      id: `unbilled-${m.id}`,
+      id: `unbilled-${u.matter.id}`,
       consequence: 'revenue',
-      score: CLASS_WEIGHT.revenue + Math.min(Math.round(minutes / 60), 80),
-      title: `Bill the logged time on ${m.title}`,
-      detail: `${(minutes / 60).toFixed(1)} billable hours recorded, oldest entry ${plural(ageDays, 'day')} old.`,
+      score: CLASS_WEIGHT.revenue + Math.min(Math.round(u.minutes / 60), 80),
+      title: `Bill the logged time on ${u.matter.title}`,
+      detail: `${(u.minutes / 60).toFixed(1)} billable hours recorded, oldest entry ${plural(u.ageDays, 'day')} old.`,
       reasoning: 'Time recorded but not invoiced is the most recoverable revenue in a small practice, and it gets harder to justify to a client the longer it sits.',
       grounding: 'fact',
       ctaLabel: 'Open time',
