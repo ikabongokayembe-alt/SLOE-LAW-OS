@@ -5,7 +5,7 @@ import { supabase, isSupabaseConfigured } from '../../lib/supabase';
 import { DetailPanel, DetailSection } from '../shared/DetailPanel';
 
 function formatBytes(bytes?: number): string {
-  if (!bytes) return '\u2014';
+  if (!bytes) return '—';
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
@@ -68,7 +68,7 @@ export function DocumentPreviewContent({
         </div>
         <div className="min-w-0">
           <div className="text-sm font-medium truncate">{doc.file_name}</div>
-          <div className="text-xs text-[var(--text-tertiary)]">{matterTitle} \u00b7 {formatBytes(doc.file_size)} \u00b7 {new Date(doc.created_at).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}</div>
+          <div className="text-xs text-[var(--text-tertiary)]">{matterTitle} · {formatBytes(doc.file_size)} · {new Date(doc.created_at).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}</div>
         </div>
       </div>
 
@@ -93,7 +93,7 @@ export function DocumentPreviewContent({
         {!isSupabaseConfigured ? (
           <div className="text-xs text-[var(--text-tertiary)] italic">No file content in preview mode -- nothing is actually uploaded here.</div>
         ) : loading ? (
-          <div className="text-xs text-[var(--text-tertiary)]">Loading preview\u2026</div>
+          <div className="text-xs text-[var(--text-tertiary)]">Loading preview…</div>
         ) : inlineKind === 'image' && signedUrl ? (
           <img src={signedUrl} alt={doc.file_name} className="max-w-full rounded-lg border border-[var(--border-subtle)]" />
         ) : inlineKind === 'pdf' && signedUrl ? (

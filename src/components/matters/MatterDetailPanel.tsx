@@ -102,22 +102,22 @@ export function MatterDetailPanel({ matter, onClose }: { matter: Matter; onClose
     <>
       <DetailPanel
         title={matter.title}
-        subtitle={`${stage?.label ?? 'Unknown stage'} \u00b7 ${matter.status.replace('_', ' ')}`}
+        subtitle={`${stage?.label ?? 'Unknown stage'} · ${matter.status.replace('_', ' ')}`}
         onClose={onClose}
       >
         <DetailSection title="Overview">
           <div className="grid grid-cols-2 gap-3 text-sm">
-            <div><div className="text-[10px] text-[var(--text-tertiary)] uppercase tracking-wider">Client</div><div className="truncate">{clientParty?.name ?? '\u2014'}</div></div>
+            <div><div className="text-[10px] text-[var(--text-tertiary)] uppercase tracking-wider">Client</div><div className="truncate">{clientParty?.name ?? '—'}</div></div>
             <div><div className="text-[10px] text-[var(--text-tertiary)] uppercase tracking-wider">Attorney</div><div className="truncate">{attorney?.name ?? 'Unassigned'}</div></div>
-            <div><div className="text-[10px] text-[var(--text-tertiary)] uppercase tracking-wider">Practice area</div><div className="truncate">{practiceArea?.label ?? '\u2014'}</div></div>
+            <div><div className="text-[10px] text-[var(--text-tertiary)] uppercase tracking-wider">Practice area</div><div className="truncate">{practiceArea?.label ?? '—'}</div></div>
             <div><div className="text-[10px] text-[var(--text-tertiary)] uppercase tracking-wider">Billing</div><div className="capitalize truncate">{matter.billing_type.replace('_', ' ')}</div></div>
             <div><div className="text-[10px] text-[var(--text-tertiary)] uppercase tracking-wider">Opened</div><div>{formatDateOnly(matter.opened_date, locale, { day: 'numeric', month: 'short', year: 'numeric' })}</div></div>
-            <div><div className="text-[10px] text-[var(--text-tertiary)] uppercase tracking-wider">Closed</div><div>{matter.closed_date ? formatDateOnly(matter.closed_date, locale, { day: 'numeric', month: 'short', year: 'numeric' }) : '\u2014'}</div></div>
+            <div><div className="text-[10px] text-[var(--text-tertiary)] uppercase tracking-wider">Closed</div><div>{matter.closed_date ? formatDateOnly(matter.closed_date, locale, { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}</div></div>
           </div>
           {matter.description && <p className="text-sm text-[var(--text-secondary)] mt-3">{matter.description}</p>}
         </DetailSection>
 
-        <DetailSection title="Intelligence \u2014 this matter">
+        <DetailSection title="Intelligence — this matter">
           {urgentActions.length === 0 && !bottleneck && deadlineRisks.length === 0 && !documentGap ? (
             <div className="flex items-center gap-2 text-sm text-[var(--signal-positive)]">
               <ShieldCheck className="w-4 h-4 shrink-0" /> No risk signals on this matter right now.
@@ -196,7 +196,7 @@ export function MatterDetailPanel({ matter, onClose }: { matter: Matter; onClose
           {availablePartiesToAdd.length > 0 && (
             <div className="flex items-center gap-1.5 mt-2">
               <select value={addPartyId} onChange={e => setAddPartyId(e.target.value)} className="flex-1 h-8 px-2 bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded text-xs focus:outline-none min-w-0">
-                <option value="">Add a party\u2026</option>
+                <option value="">Add a party…</option>
                 {availablePartiesToAdd.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
               <select value={addPartyRole} onChange={e => setAddPartyRole(e.target.value as MatterPartyRole)} className="h-8 px-2 bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded text-xs focus:outline-none shrink-0">
