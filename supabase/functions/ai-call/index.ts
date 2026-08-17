@@ -1,26 +1,135 @@
 // Supabase Edge Function: ai-call
-// Gemini is the sole provider (the currently funded one). One short-delay
-// retry on transient failure before giving up — no second-provider
-// fallback, since the only other provider option isn't funded right now
-// and attempting it on Gemini failure would just add latency for a call
-// that's also going to fail. Keeps the wire format the frontend
-// (src/lib/gemini.ts) already expects:
+// Gemini is the sole provider (the currently funded one). Keeps the wire
+// format the frontend (src/lib/gemini.ts) already expects:
 //   - non-stream: { text: string }
 //   - stream: SSE lines "data: {\"choices\":[{\"delta\":{\"content\":...}}]}\n\n"
 // On total failure the caller gets a clean, generic error — never a raw
 // provider error string.
 // Deploy: supabase functions deploy ai-call
 // Secrets: supabase secrets set GEMINI_API_KEY=...
+//          supabase secrets set GEMINI_API_KEY_2=...  (optional — see rotation
+//          block below; set as many of _2/_3/_4 as you provision)
 //          supabase secrets set SENTRY_DSN=...  (error monitoring — see _shared/sentry.ts; optional, no-ops if unset)
 
 import { reportError } from '../_shared/sentry.ts';
 
 // @ts-ignore Deno global is available in the Supabase Edge Function runtime
-const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY');
+const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
 const GEMINI_MODEL = 'gemini-2.5-flash';
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
-// @ts-ignore Deno global is available in the Supabase Edge Function runtime
-const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
+
+// ═══════════════════════════════════════════════════════════════════════
+// KEY ROTATION ON QUOTA — matches Sloe Laboratory's own resilience shape,
+// with one discrepancy called out rather than silently resolved.
+//
+// Sloe Laboratory's actual `collectGeminiKeys()` — read directly from
+// working code in TWO places (api/llm-gateway.ts:17 and
+// apps/tenant/server.ts:705) — returns ONLY `process.env.GEMINI_API_KEY`
+// in both. The tenant server's own comment says "Collect the SINGLE
+// Gemini key used by the tenant runtime." `.env.example` lists
+// GEMINI_API_KEY_2/_3/_4, but neither collectGeminiKeys() implementation
+// reads them — they are unconsumed anywhere I could find in that repo.
+//
+// So "match collectGeminiKeys() exactly" and "rotate across _2/_3/_4" are
+// in tension in the reference itself. This deliberately builds the
+// SECOND one, because it is the version that solves the actual problem
+// (the 5-req/min ceiling hit during live testing) — a rotation loop fed
+// a single key cannot rotate. What IS matched exactly is the loop
+// STRUCTURE around collectGeminiKeys()'s return value: per-key attempt,
+// rotate to the next key on a quota error if one remains, a single
+// same-key retry on any other error, throw once both are exhausted. The
+// env var naming (_2/_3/_4) is the one Sloe Laboratory's own
+// .env.example already established, reused rather than invented.
+//
+// One further divergence, and why it's safe: the reference's loop
+// carries a `written` guard because it streams FROM Gemini and can't
+// safely retry after real bytes have gone out (a retry would duplicate
+// text). ai-call has never called Gemini's streaming API — it always
+// does one buffered generateContent call and fakes SSE chunking for the
+// client afterward (see sseChunk usage below, unchanged). There is no
+// partial-Gemini-response case here to guard against, so no `written`
+// equivalent is needed.
+// ═══════════════════════════════════════════════════════════════════════
+
+function collectGeminiKeys(): string[] {
+  // @ts-ignore Deno global is available in the Supabase Edge Function runtime
+  const raw = [
+    Deno.env.get('GEMINI_API_KEY'),
+    // @ts-ignore Deno global is available in the Supabase Edge Function runtime
+    Deno.env.get('GEMINI_API_KEY_2'),
+    // @ts-ignore Deno global is available in the Supabase Edge Function runtime
+    Deno.env.get('GEMINI_API_KEY_3'),
+    // @ts-ignore Deno global is available in the Supabase Edge Function runtime
+    Deno.env.get('GEMINI_API_KEY_4'),
+  ];
+  return raw
+    .map((k) => (k ?? '').replace(/^['"]/, '').replace(/['"]$/, '').trim())
+    .filter((k) => k.length > 0 && k !== 'stub' && k !== 'undefined' && k !== 'null');
+}
+
+// Same detection the reference's isQuotaError() uses, adapted from an SDK
+// error object to a raw fetch Response + body text (this file has never
+// used the @google/genai SDK — it calls the REST endpoint directly, same
+// as before this change).
+function isQuotaResponse(status: number, bodyText: string): boolean {
+  if (status === 429) return true;
+  return /\b429\b|RESOURCE_EXHAUSTED|quota.*exceeded|rate[ _-]?limit/i.test(bodyText);
+}
+
+async function postToGemini(body: unknown, apiKey: string): Promise<{ ok: boolean; status: number; text: string }> {
+  const res = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  return { ok: res.ok, status: res.status, text };
+}
+
+// The shared primitive both call sites below go through: callGeminiOnce
+// (plain prompt -> text) and runWithTools' per-round call (contents +
+// function_declarations). Agnostic to what's in `body` — only the key
+// used to reach Gemini rotates, never the request shape.
+//
+// Loop shape, matching the reference's inner resilience layer exactly:
+//   for each key: attempt; on success return; on a QUOTA error with a
+//   key still unused, rotate and continue (no retry spent); on any other
+//   error, spend the ONE retry on the same key before moving on; once a
+//   key's retry is spent and it still fails, that failure propagates —
+//   the outer generateText() retry (unchanged, below) is what catches a
+//   total failure across every key and turns it into the clean
+//   AI_PROVIDER_UNAVAILABLE error the frontend already expects.
+async function requestGeminiWithRotation(body: unknown): Promise<any> {
+  const keys = collectGeminiKeys();
+  if (keys.length === 0) throw new Error('GEMINI_API_KEY not configured');
+
+  let retriedOnce = false;
+  for (let i = 0; i < keys.length; i++) {
+    const r = await postToGemini(body, keys[i]);
+    if (r.ok) {
+      try {
+        return JSON.parse(r.text);
+      } catch {
+        throw new Error(`Gemini returned non-JSON on a 2xx response: ${r.text.slice(0, 200)}`);
+      }
+    }
+    if (isQuotaResponse(r.status, r.text) && i + 1 < keys.length) {
+      console.warn(`[ai-call] key ${i} quota, rotating to ${i + 1}`);
+      continue;
+    }
+    if (!retriedOnce) {
+      retriedOnce = true;
+      console.warn(`[ai-call] transient error on key ${i} (${r.status}), retrying once`);
+      i--;
+      continue;
+    }
+    throw new Error(`Gemini ${r.status}: ${r.text}`);
+  }
+  // Unreachable: the loop above always returns or throws before falling
+  // through — every iteration either succeeds, rotates, retries, or
+  // throws. Kept only so TypeScript sees every path return.
+  throw new Error('Gemini request failed after exhausting all configured keys');
+}
 
 // ═══════════════════════════════════════════════════════════════════════
 // TWO-PASS TOOL USE
@@ -79,13 +188,9 @@ async function runWithTools(prompt: string, authHeader: string): Promise<string>
   const contents: any[] = [{ role: 'user', parts: [{ text: prompt }] }];
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-    const res = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents, tools: [{ function_declarations: declarations }] }),
+    const data = await requestGeminiWithRotation({
+      contents, tools: [{ function_declarations: declarations }],
     });
-    if (!res.ok) throw new Error(`Gemini ${res.status}: ${await res.text()}`);
-    const data = await res.json();
     const parts = data?.candidates?.[0]?.content?.parts ?? [];
     const calls = parts.filter((p: any) => p.functionCall);
 
@@ -133,23 +238,10 @@ function sleep(ms: number): Promise<void> {
 }
 
 async function callGeminiOnce(prompt: string, expectJson: boolean): Promise<string> {
-  if (!GEMINI_API_KEY) throw new Error('GEMINI_API_KEY not configured');
-
-  const res = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: expectJson ? { responseMimeType: 'application/json' } : {},
-    }),
+  const data = await requestGeminiWithRotation({
+    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    generationConfig: expectJson ? { responseMimeType: 'application/json' } : {},
   });
-
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Gemini ${res.status}: ${errText}`);
-  }
-
-  const data = await res.json();
   const text = data?.candidates?.[0]?.content?.parts?.map((p: any) => p.text).join('') ?? '';
   if (!text) throw new Error('Empty Gemini response');
   return text;
