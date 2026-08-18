@@ -55,6 +55,7 @@ interface StoreState {
 interface StoreActions {
   refresh: () => Promise<void>;
   updateFirm: (patch: Partial<Pick<Firm, 'country' | 'region' | 'currency' | 'locale'>>) => Promise<{ error?: string }>;
+  regenerateIntakeToken: () => Promise<{ error?: string }>;
   addPracticeArea: (pa: { key: string; label: string }) => Promise<{ error?: string }>;
   updatePracticeArea: (id: string, patch: Partial<Pick<PracticeArea, 'is_active' | 'label'>>) => Promise<{ error?: string }>;
   addParty: (party: Omit<Party, 'id'>) => Promise<Party | null>;
@@ -149,7 +150,7 @@ function loadMockData(): Omit<StoreState, 'loading' | 'error' | 'hasLoadedOnce'>
 
 async function loadAll(firmId: string): Promise<Omit<StoreState, 'loading' | 'error' | 'hasLoadedOnce' | 'integrationConnections'>> {
   const [firmR, attorneysR, practiceAreasR, matterStagesR, partiesR, conflictChecksR, mattersR, deadlinesR, insightsR, documentsR, agentRequestsR, deadlineRulesR, importBatchesR, timeEntriesR, communicationsR, auditLogR, clientInvitesR, clientUsersR, signatureRequestsR, matterPartiesR, partyRelationshipsR, invoicesR] = await Promise.all([
-    supabase.from('firms').select('id,name,country,region,currency,locale').eq('id', firmId).single(),
+    supabase.from('firms').select('id,name,country,region,currency,locale,intake_token').eq('id', firmId).single(),
     supabase.from('attorneys').select('*').eq('firm_id', firmId).order('name'),
     supabase.from('practice_areas').select('*').eq('firm_id', firmId),
     supabase.from('matter_stages').select('*').eq('firm_id', firmId).order('sort_order'),
@@ -331,10 +332,28 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       showToast('success', 'Saved (preview mode — nothing persists here).');
       return {};
     }
-    const { data, error } = await supabase.from('firms').update(patch).eq('id', firmId).select('id,name,country,region,currency,locale').single();
+    const { data, error } = await supabase.from('firms').update(patch).eq('id', firmId).select('id,name,country,region,currency,locale,intake_token').single();
     if (error || !data) { showToast('error', "Couldn't save firm settings."); return { error: error?.message }; }
     setState(s => ({ ...s, firm: data as Firm }));
     showToast('success', 'Firm settings saved.');
+    return {};
+  }, [firmId]);
+
+  // Rotates the shareable client-intake link (see migration 0026) --
+  // e.g. if it leaked somewhere it shouldn't have. The old link stops
+  // working the moment this succeeds, since submit_intake looks up the
+  // firm strictly by exact token match.
+  const regenerateIntakeToken = useCallback(async () => {
+    const newToken = crypto.randomUUID();
+    if (!isSupabaseConfigured) {
+      setState(s => ({ ...s, firm: s.firm ? { ...s.firm, intake_token: newToken } : s.firm }));
+      showToast('success', 'Intake link regenerated (preview mode — nothing persists here).');
+      return {};
+    }
+    const { data, error } = await supabase.from('firms').update({ intake_token: newToken }).eq('id', firmId).select('id,name,country,region,currency,locale,intake_token').single();
+    if (error || !data) { showToast('error', "Couldn't regenerate the intake link."); return { error: error?.message }; }
+    setState(s => ({ ...s, firm: data as Firm }));
+    showToast('success', 'Intake link regenerated — the old link no longer works.');
     return {};
   }, [firmId]);
 
@@ -1090,7 +1109,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   return (
     <StoreContext.Provider value={{
       ...state,
-      refresh, updateFirm, addPracticeArea, updatePracticeArea, addParty, runConflictCheck, clearConflictCheck, addMatter, addMatterParty, removeMatterParty, updateMatterStage, updateMatterAttorney, linkMatterConflictCheck, addDeadline, updateDeadline, addInsights, uploadDocument, deleteDocument, requestAgent, removeAgentRequest, commitImportBatch, removeImportBatch, addTimeEntry, updateTimeEntry, deleteTimeEntry, generateInvoice, refreshIntegrations, pushDeadlineToCalendar, sendMatterCommunication, inviteClientToPortal, setDocumentClientVisible, sendForSignature, refreshSignatureStatus, cancelSignatureRequest,
+      refresh, updateFirm, regenerateIntakeToken, addPracticeArea, updatePracticeArea, addParty, runConflictCheck, clearConflictCheck, addMatter, addMatterParty, removeMatterParty, updateMatterStage, updateMatterAttorney, linkMatterConflictCheck, addDeadline, updateDeadline, addInsights, uploadDocument, deleteDocument, requestAgent, removeAgentRequest, commitImportBatch, removeImportBatch, addTimeEntry, updateTimeEntry, deleteTimeEntry, generateInvoice, refreshIntegrations, pushDeadlineToCalendar, sendMatterCommunication, inviteClientToPortal, setDocumentClientVisible, sendForSignature, refreshSignatureStatus, cancelSignatureRequest,
     }}>
       {children}
     </StoreContext.Provider>

@@ -15,6 +15,11 @@ export interface Firm {
   region?: string | null;
   currency?: string | null;
   locale?: string | null;
+  // Shareable client-intake link token (see migration 0026) — the
+  // full link is `${origin}/intake?token=${intake_token}`. One per firm,
+  // reusable (unlike the one-time invite tokens elsewhere), regenerable
+  // from Firm Settings if it leaks.
+  intake_token?: string;
 }
 
 export interface PracticeArea {

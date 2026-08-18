@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useStore } from '../../lib/store';
-import { Settings, Plus, FileUp, ChevronRight } from 'lucide-react';
+import { useToast } from '../../lib/toast';
+import { Settings, Plus, FileUp, ChevronRight, Copy, RotateCw, UserPlus } from 'lucide-react';
 
 function slugify(label: string): string {
   return label.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
@@ -12,7 +13,9 @@ function slugify(label: string): string {
 // statute-of-limitations engine and Phase 1 billing later, and are fed
 // into the Operator/Analyst AI prompts as jurisdiction context now.
 export function SettingsScreen() {
-  const { firm, updateFirm, practiceAreas, addPracticeArea, updatePracticeArea } = useStore();
+  const { firm, updateFirm, regenerateIntakeToken, practiceAreas, addPracticeArea, updatePracticeArea } = useStore();
+  const { showToast } = useToast();
+  const [regeneratingIntake, setRegeneratingIntake] = useState(false);
   const [country, setCountry] = useState('');
   const [region, setRegion] = useState('');
   const [currency, setCurrency] = useState('');
@@ -56,6 +59,21 @@ export function SettingsScreen() {
     setToggleBusyId(id);
     await updatePracticeArea(id, { is_active: !current });
     setToggleBusyId(null);
+  };
+
+  const intakeLink = firm?.intake_token ? `${window.location.origin}/intake?token=${firm.intake_token}` : '';
+
+  const handleCopyIntakeLink = async () => {
+    if (!intakeLink) return;
+    try { await navigator.clipboard.writeText(intakeLink); showToast('success', 'Intake link copied to clipboard.'); }
+    catch { showToast('error', "Couldn't copy the link — clipboard unavailable."); }
+  };
+
+  const handleRegenerateIntakeLink = async () => {
+    if (!confirm('Regenerate the intake link? The current link will stop working immediately — update it anywhere it\'s posted (website, email signature, etc.).')) return;
+    setRegeneratingIntake(true);
+    await regenerateIntakeToken();
+    setRegeneratingIntake(false);
   };
 
   const handleAddPracticeArea = async (e: React.FormEvent) => {
@@ -218,6 +236,40 @@ export function SettingsScreen() {
             <Plus className="w-3.5 h-3.5" /> Add
           </button>
         </form>
+      </div>
+
+      <div className="mt-8">
+        <h3 className="text-sm font-medium mb-1">Client Intake</h3>
+        <p className="text-xs text-[var(--text-secondary)] mb-3">
+          Share this link on your website or in email — a submission creates a real prospective client and a matter in your Intake column automatically. It still goes through Conflict Check like any other matter before it can move further.
+        </p>
+        <div className="border border-[var(--border-subtle)] rounded-lg p-4">
+          {!firm ? (
+            <span className="text-xs text-[var(--text-tertiary)]">Loading…</span>
+          ) : (
+            <>
+              <div className="flex items-center gap-2 mb-3">
+                <UserPlus className="w-4 h-4 text-[var(--text-secondary)] shrink-0" />
+                <code className="flex-1 min-w-0 text-xs text-[var(--text-secondary)] bg-[var(--bg-tertiary)] rounded px-2 py-1.5 truncate">{intakeLink}</code>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleCopyIntakeLink}
+                  className="h-8 px-3 flex items-center gap-1.5 text-xs font-medium bg-[var(--text-primary)] text-[var(--bg-primary)] rounded hover:opacity-90 transition-opacity"
+                >
+                  <Copy className="w-3.5 h-3.5" /> Copy link
+                </button>
+                <button
+                  onClick={handleRegenerateIntakeLink}
+                  disabled={regeneratingIntake}
+                  className="h-8 px-3 flex items-center gap-1.5 text-xs font-medium border border-[var(--border-subtle)] rounded hover:bg-[var(--bg-tertiary)] transition-colors disabled:opacity-40"
+                >
+                  <RotateCw className={`w-3.5 h-3.5 ${regeneratingIntake ? 'animate-spin' : ''}`} /> Regenerate
+                </button>
+              </div>
+            </>
+          )}
+        </div>
       </div>
 
       <div className="mt-8">

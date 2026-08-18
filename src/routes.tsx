@@ -25,8 +25,15 @@ import { PortalLoginScreen } from './components/portal/PortalLoginScreen';
 import { PortalAcceptInviteScreen } from './components/portal/PortalAcceptInviteScreen';
 import { PortalDashboard } from './components/portal/PortalDashboard';
 import { RequireClientAuth } from './components/portal/RequireClientAuth';
+import { IntakeFormScreen } from './components/intake/IntakeFormScreen';
 
 export const router = createBrowserRouter([
+  // Public client intake -- reachable by anyone with a firm's shareable
+  // link, no session of any kind. Deliberately outside every provider
+  // tree (StaffProviders/PortalProviders): it needs neither StoreProvider
+  // (no firm-scoped staff data) nor ClientAuthProvider (no client login --
+  // a prospective client isn't an account, see migration 0026).
+  { path: '/intake', element: <IntakeFormScreen /> },
   {
     element: <StaffProviders />,
     children: [
