@@ -242,7 +242,7 @@ async function loadAll(firmId: string): Promise<Omit<StoreState, 'loading' | 'er
 }
 
 export function StoreProvider({ children }: { children: React.ReactNode }) {
-  const { profile } = useAuth();
+  const { profile, loading: authLoading } = useAuth();
   const { showToast } = useToast();
   const firmId = profile?.firm_id ?? DEMO_TENANT_ID;
   // Real, live-confirmed bug: AuthProvider's `profile` starts null and
@@ -259,6 +259,20 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   // profile object refresh (e.g. a token refresh), only on the actual
   // null -> loaded transition.
   const hasRealProfile = isSupabaseConfigured ? !!profile : true;
+  // Second real bug, found live while sanity-checking an unrelated change:
+  // an UNAUTHENTICATED visit never resolves a profile at all -- `profile`
+  // stays null forever, not just briefly. The guard above (correctly)
+  // never calls loadAll() in that case, but with nothing else to end the
+  // wait, `hasLoadedOnce` never became true either, so StoreProvider's own
+  // blocking "Loading Law OS..." screen (rendered below, before `children`
+  // -- which is what eventually renders RequireAuth) never released, and
+  // RequireAuth's redirect-to-/login could never run. Confirmed live: a
+  // fresh, logged-out visit hung on the loading screen forever instead of
+  // reaching the login page. `confirmedLoggedOut` is the missing terminal
+  // state -- AuthProvider has definitively finished checking (authLoading
+  // false) and found no session (profile still null) -- distinct from
+  // "hasn't checked yet", which must keep waiting.
+  const confirmedLoggedOut = isSupabaseConfigured && !authLoading && !profile;
 
   const [state, setState] = useState<StoreState>({
     loading: true, error: null, hasLoadedOnce: false,
@@ -273,6 +287,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       setState(s => ({ ...s, ...loadMockData(), loading: false, hasLoadedOnce: true, error: null }));
       return;
     }
+    if (confirmedLoggedOut) {
+      // Nothing to load and nothing to wait for -- release the loading
+      // gate so `children` (RequireAuth) actually renders and can redirect
+      // to /login, rather than blocking on a profile that will never
+      // arrive. See the comment on confirmedLoggedOut above.
+      setState(s => ({ ...s, loading: false, hasLoadedOnce: true, error: null }));
+      return;
+    }
     // Wait for the real profile rather than fetching against the
     // DEMO_TENANT_ID fallback -- see the comment on hasRealProfile above.
     if (!hasRealProfile) return;
@@ -284,7 +306,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       console.error('[store] refresh failed:', e);
       setState(s => ({ ...s, loading: false, hasLoadedOnce: true, error: e?.message ?? 'load failed' }));
     }
-  }, [firmId, hasRealProfile]);
+  }, [firmId, hasRealProfile, confirmedLoggedOut]);
 
   useEffect(() => { refresh(); }, [refresh]);
 
