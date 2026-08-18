@@ -1,0 +1,18 @@
+-- Per-user Command Center category mute/dismiss (product-audit fix:
+-- "features that can't be turned off" is a recurring, sourced complaint
+-- about legal practice tools). Deliberately narrow -- one array column on
+-- the user's own profile row, not a general preferences table. Detection
+-- itself (lib/urgentActions.ts) is completely untouched: muting is a
+-- display preference only, never a data deletion, and it can never affect
+-- what fires for anyone else at the firm.
+--
+-- Values stored here are ConsequenceClass strings ('professional',
+-- 'revenue', 'relationship' -- see lib/urgentActions.ts), not validated by
+-- a check constraint: the set of categories is a frontend concept, and a
+-- constraint here would just be one more place that list has to be kept
+-- in sync by hand.
+--
+-- No new RLS policy needed: "profiles self update" (migration 0001)
+-- already lets a user update their own profile row with no column
+-- restriction, since it only checks `id = auth.uid()`.
+alter table profiles add column if not exists muted_dashboard_categories text[] not null default '{}';

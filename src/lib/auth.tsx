@@ -12,6 +12,12 @@ export interface Profile {
   role: UserRole;
   name: string;
   email: string;
+  // Command Center category mute/dismiss (see migration 0024) -- which of
+  // this USER's own consequence-class sections (ConsequenceClass values:
+  // 'professional' | 'revenue' | 'relationship') are hidden on their
+  // Command Center. Per-user by design: never affects what fires or what
+  // anyone else at the firm sees.
+  muted_dashboard_categories: string[];
 }
 
 interface AuthState {
@@ -24,6 +30,7 @@ interface AuthState {
   signOut: () => Promise<void>;
   acceptInvite: (token: string, password: string, name: string) => Promise<{ error?: string }>;
   setDevProfile: (profile: Profile) => void;
+  toggleMutedDashboardCategory: (category: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthState | null>(null);
@@ -31,9 +38,9 @@ const AuthContext = createContext<AuthState | null>(null);
 const DEMO_FIRM_ID = 'e47f9c12-8b3a-4d21-9f5e-1a2b3c4d5e6f';
 
 const DEV_PROFILES: Profile[] = [
-  { id: 'dev-principal', firm_id: DEMO_FIRM_ID, firm_name: 'Demo Firm', attorney_id: null, role: 'principal', name: 'Demo Partner (Principal)', email: 'principal@demo.local' },
+  { id: 'dev-principal', firm_id: DEMO_FIRM_ID, firm_name: 'Demo Firm', attorney_id: null, role: 'principal', name: 'Demo Partner (Principal)', email: 'principal@demo.local', muted_dashboard_categories: [] },
   ...mockAttorneys.map((a): Profile => ({
-    id: `dev-${a.id}`, firm_id: DEMO_FIRM_ID, firm_name: 'Demo Firm', attorney_id: a.id, role: 'agent', name: `${a.name} (Associate)`, email: `${a.name.toLowerCase().replace(/\s+/g, '.')}@demo.local`,
+    id: `dev-${a.id}`, firm_id: DEMO_FIRM_ID, firm_name: 'Demo Firm', attorney_id: a.id, role: 'agent', name: `${a.name} (Associate)`, email: `${a.name.toLowerCase().replace(/\s+/g, '.')}@demo.local`, muted_dashboard_categories: [],
   })),
 ];
 
@@ -48,7 +55,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const { data, error } = await supabase.from('profiles').select('*, firms(name)').eq('id', userId).single();
     if (error) { console.error('[auth] fetchProfile failed:', error); setProfile(null); return; }
     const { firms, ...rest } = data as any;
-    setProfile({ ...rest, firm_name: firms?.name ?? 'Law OS' } as Profile);
+    // muted_dashboard_categories predates any row written before migration
+    // 0024 -- the column default ('{}') covers that at the DB level, but
+    // `rest.muted_dashboard_categories ?? []` is a second, harmless guard
+    // in case a stale schema cache ever omits it from `data`.
+    setProfile({ ...rest, firm_name: firms?.name ?? 'Law OS', muted_dashboard_categories: rest.muted_dashboard_categories ?? [] } as Profile);
   }, []);
 
   useEffect(() => {
@@ -120,10 +131,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const setDevProfile = useCallback((p: Profile) => { setProfile(p); }, []);
 
+  // Command Center category mute/dismiss (see migration 0024). Optimistic
+  // local update first (the section should disappear/reappear instantly,
+  // not wait on a round trip), then persisted to this user's own profile
+  // row -- reverted if the write fails, so the UI never claims a
+  // preference is saved when it wasn't.
+  const toggleMutedDashboardCategory = useCallback(async (category: string) => {
+    if (!profile) return;
+    const previous = profile;
+    const next = profile.muted_dashboard_categories.includes(category)
+      ? profile.muted_dashboard_categories.filter(c => c !== category)
+      : [...profile.muted_dashboard_categories, category];
+    setProfile({ ...profile, muted_dashboard_categories: next });
+    if (!isSupabaseConfigured) return; // preview mode -- nothing persists here, matches every other mutation in this app
+    const { error } = await supabase.from('profiles').update({ muted_dashboard_categories: next }).eq('id', profile.id);
+    if (error) {
+      console.error('[auth] toggleMutedDashboardCategory failed:', error);
+      setProfile(previous);
+    }
+  }, [profile]);
+
   return (
     <AuthContext.Provider value={{
       loading, session, profile, isDevMode: !isSupabaseConfigured,
-      signUp, signIn, signOut, acceptInvite, setDevProfile,
+      signUp, signIn, signOut, acceptInvite, setDevProfile, toggleMutedDashboardCategory,
     }}>
       {children}
     </AuthContext.Provider>

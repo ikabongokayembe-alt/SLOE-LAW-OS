@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react';
 import { useStore } from '../../lib/store';
+import { useAuth } from '../../lib/auth';
 import { AgentLibraryTeaserCard } from './AgentLibraryTeaserCard';
 import { GroundingNotice } from '../shared/GroundingNotice';
 import { Link, useNavigate } from 'react-router-dom';
-import { Sparkles, ShieldAlert, Banknote, MessageCircle, Info, ArrowRight, ShieldCheck } from 'lucide-react';
+import { Sparkles, ShieldAlert, Banknote, MessageCircle, Info, ArrowRight, ShieldCheck, EyeOff, Eye } from 'lucide-react';
 import { buildUrgentActions, UrgentAction, ConsequenceClass } from '../../lib/urgentActions';
 import { runBulkConflictChecks } from '../../lib/bulkConflictCheck';
 
@@ -192,6 +193,13 @@ function BundledActionCard({
 
 export function DashboardScreen() {
   const { matters, deadlines, conflictChecks, documents, timeEntries, communications, parties, runConflictCheck, linkMatterConflictCheck } = useStore();
+  const { profile, toggleMutedDashboardCategory } = useAuth();
+  // Command Center category mute/dismiss (product-audit fix: "features
+  // that can't be turned off" is a recurring complaint about legal
+  // practice tools). Per-user display preference only -- buildUrgentActions
+  // above still runs unfiltered over every matter/deadline for everyone,
+  // exactly as before; muting only affects what THIS profile renders below.
+  const mutedCategories = profile?.muted_dashboard_categories ?? [];
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
   const [bulkRunning, setBulkRunning] = useState(false);
@@ -212,8 +220,20 @@ export function DashboardScreen() {
     const order: ConsequenceClass[] = ['professional', 'revenue', 'relationship'];
     return order
       .map(consequence => ({ consequence, bundles: bundles.filter(b => b.consequence === consequence) }))
-      .filter(s => s.bundles.length > 0);
-  }, [bundles]);
+      .filter(s => s.bundles.length > 0 && !mutedCategories.includes(s.consequence));
+  }, [bundles, mutedCategories]);
+
+  // Sections that have real findings right now but are muted -- shown as
+  // small, easy-to-reverse chips (see JSX below) so muting is never a
+  // one-way door someone has to dig through settings to undo. A category
+  // with zero findings never appears here even if muted; nothing to
+  // restore visibility to.
+  const mutedWithFindings = useMemo(() => {
+    const order: ConsequenceClass[] = ['professional', 'revenue', 'relationship'];
+    return order
+      .map(consequence => ({ consequence, count: bundles.filter(b => b.consequence === consequence).reduce((s, b) => s + b.items.length, 0) }))
+      .filter(s => s.count > 0 && mutedCategories.includes(s.consequence));
+  }, [bundles, mutedCategories]);
 
   // Deadline-kind bundles (overdue/unprepped) key off a deadline id;
   // matter-kind bundles (noconflict/stale/unbilled) key off a matter id.
@@ -273,15 +293,37 @@ export function DashboardScreen() {
         <GroundingNotice />
       </div>
 
-      {sections.length === 0 ? (
-        <div className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg p-6 text-sm text-[var(--text-secondary)]">
-          <div className="flex items-center gap-2 text-[var(--signal-positive)] mb-1">
-            <ShieldCheck className="w-4 h-4 shrink-0" /> Nothing needs a decision right now.
-          </div>
-          <span className="block text-xs text-[var(--text-tertiary)]">
-            This checks deadlines, conflict screening, client contact and unbilled time across your active matters.
-          </span>
+      {mutedWithFindings.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--text-tertiary)]">
+          <span>Muted:</span>
+          {mutedWithFindings.map(({ consequence, count }) => (
+            <button
+              key={consequence}
+              onClick={() => toggleMutedDashboardCategory(consequence)}
+              title={`${count} finding${count === 1 ? '' : 's'} hidden — click to unmute`}
+              className="flex items-center gap-1 px-2 py-1 rounded-full border border-[var(--border-subtle)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)] transition-colors"
+            >
+              <Eye className="w-3 h-3" /> {CONSEQUENCE_META[consequence].label} ({count})
+            </button>
+          ))}
         </div>
+      )}
+
+      {sections.length === 0 ? (
+        // bundles is the FULL, unfiltered list -- if it's genuinely empty,
+        // say so. If it's non-empty but every section landed here muted,
+        // the chips row above already explains where everything went; a
+        // second "nothing needs a decision" message would be dishonest.
+        bundles.length === 0 && (
+          <div className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg p-6 text-sm text-[var(--text-secondary)]">
+            <div className="flex items-center gap-2 text-[var(--signal-positive)] mb-1">
+              <ShieldCheck className="w-4 h-4 shrink-0" /> Nothing needs a decision right now.
+            </div>
+            <span className="block text-xs text-[var(--text-tertiary)]">
+              This checks deadlines, conflict screening, client contact and unbilled time across your active matters.
+            </span>
+          </div>
+        )
       ) : (
         <div className="space-y-6">
           {sections.map(({ consequence, bundles: sectionBundles }) => {
@@ -295,6 +337,13 @@ export function DashboardScreen() {
                   <h3 className="text-sm font-semibold" style={{ color: meta.color }}>{meta.label}</h3>
                   <span className="text-xs text-[var(--text-tertiary)] bg-[var(--bg-tertiary)] rounded-full px-2 py-0.5">{count}</span>
                   <div className="flex-1 h-px bg-[var(--border-subtle)]" />
+                  <button
+                    onClick={() => toggleMutedDashboardCategory(consequence)}
+                    title={`Hide the ${meta.label} category — you can unmute it any time`}
+                    className="flex items-center gap-1 text-[10px] uppercase tracking-wider text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors shrink-0"
+                  >
+                    <EyeOff className="w-3 h-3" /> Mute
+                  </button>
                 </div>
                 <div className="space-y-3">
                   {sectionBundles.map(bundle => bundle.items.length === 1 ? (
