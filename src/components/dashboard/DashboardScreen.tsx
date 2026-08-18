@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useStore } from '../../lib/store';
 import { AgentLibraryTeaserCard } from './AgentLibraryTeaserCard';
+import { GroundingNotice } from '../shared/GroundingNotice';
 import { Link, useNavigate } from 'react-router-dom';
 import { Sparkles, ShieldAlert, Banknote, MessageCircle, Info, ArrowRight, ShieldCheck } from 'lucide-react';
 import { buildUrgentActions, UrgentAction, ConsequenceClass } from '../../lib/urgentActions';
@@ -266,9 +267,10 @@ export function DashboardScreen() {
           noise, not substance — the full list is one click away. */}
       <div>
         <h2 className="text-xl font-medium mb-1">What needs a decision</h2>
-        <p className="text-sm text-[var(--text-secondary)]">
+        <p className="text-sm text-[var(--text-secondary)] mb-2">
           Grouped by consequence — professional risk first, then revenue, then client relationships.
         </p>
+        <GroundingNotice />
       </div>
 
       {sections.length === 0 ? (
