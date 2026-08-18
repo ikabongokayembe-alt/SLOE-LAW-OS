@@ -10,7 +10,7 @@ import { findBottlenecks, assessDeadlineRisk, findDocumentGaps } from '../../lib
 import { buildUrgentActions } from '../../lib/urgentActions';
 import { formatDateOnly } from '../../lib/dates';
 import { computeAmount, formatAmount, formatHours } from '../../lib/timeEntries';
-import { AlertTriangle, Clock, FileText, ShieldCheck, ShieldAlert, UserPlus, X } from 'lucide-react';
+import { AlertTriangle, Clock, FileText, ShieldCheck, ShieldAlert, UserPlus, X, Receipt } from 'lucide-react';
 
 const ROLE_LABEL: Record<MatterPartyRole, string> = {
   client: 'Client', opposing: 'Opposing', witness: 'Witness', co_counsel: 'Co-counsel', other: 'Other',
@@ -26,7 +26,7 @@ const ROLE_LABEL: Record<MatterPartyRole, string> = {
 // about the same matter.
 export function MatterDetailPanel({ matter, onClose }: { matter: Matter; onClose: () => void }) {
   const {
-    matterStages, practiceAreas, attorneys, parties, matters, deadlines, conflictChecks, documents, timeEntries,
+    matterStages, practiceAreas, attorneys, parties, matters, deadlines, conflictChecks, documents, timeEntries, invoices,
     communications, auditLog, matterParties, partyRelationships, addMatterParty, removeMatterParty, deleteDocument, setDocumentClientVisible, firm,
   } = useStore();
   const { isDevMode } = useAuth();
@@ -45,6 +45,9 @@ export function MatterDetailPanel({ matter, onClose }: { matter: Matter; onClose
   const matterDeadlines = useMemo(() => deadlines.filter(d => d.matter_id === matter.id && !d.deleted_at), [deadlines, matter.id]);
   const matterDocuments = useMemo(() => documents.filter(d => d.matter_id === matter.id), [documents, matter.id]);
   const matterTimeEntries = useMemo(() => timeEntries.filter(t => t.matter_id === matter.id), [timeEntries, matter.id]);
+  // Retrievable later, not just a one-time PDF download -- see migration
+  // 0025 / lib/invoice.ts.
+  const matterInvoices = useMemo(() => invoices.filter(i => i.matter_id === matter.id), [invoices, matter.id]);
   const matterCommunications = useMemo(() => communications.filter(c => c.matter_id === matter.id), [communications, matter.id]);
   const matterConflictChecks = useMemo(() => conflictChecks.filter(c => c.matter_id === matter.id), [conflictChecks, matter.id]);
   const additionalParties = useMemo(() => matterParties.filter(mp => mp.matter_id === matter.id), [matterParties, matter.id]);
@@ -233,6 +236,31 @@ export function MatterDetailPanel({ matter, onClose }: { matter: Matter; onClose
                 <button key={d.id} onClick={() => setPreviewDocId(d.id)} className="w-full flex items-center gap-2 text-sm bg-[var(--bg-tertiary)] rounded px-2 py-1.5 text-left hover:bg-[var(--bg-elevated)] transition-colors">
                   <FileText className="w-3.5 h-3.5 text-[var(--text-tertiary)] shrink-0" />
                   <span className="truncate flex-1 min-w-0">{d.file_name}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </DetailSection>
+
+        <DetailSection title={`Invoices (${matterInvoices.length})`}>
+          {matterInvoices.length === 0 ? (
+            <div className="text-xs text-[var(--text-tertiary)]">No invoices generated for this matter yet — generate one from the Time screen's unbilled-time banner.</div>
+          ) : (
+            <div className="space-y-1.5">
+              {matterInvoices.map(inv => (
+                <button
+                  key={inv.id}
+                  onClick={() => handleDownload(inv.storage_path, `${inv.invoice_number}.pdf`)}
+                  className="w-full flex items-center justify-between gap-2 text-sm bg-[var(--bg-tertiary)] rounded px-2 py-1.5 text-left hover:bg-[var(--bg-elevated)] transition-colors"
+                >
+                  <span className="flex items-center gap-1.5 min-w-0">
+                    <Receipt className="w-3.5 h-3.5 text-[var(--text-tertiary)] shrink-0" />
+                    <span className="truncate">{inv.invoice_number}</span>
+                  </span>
+                  <span className="text-xs text-[var(--text-tertiary)] shrink-0 ml-2">
+                    {formatDateOnly(inv.issued_date, locale, { day: 'numeric', month: 'short', year: 'numeric' })}
+                    {inv.total_amount !== null && <> · {formatAmount(inv.total_amount, inv.currency, locale)}</>}
+                  </span>
                 </button>
               ))}
             </div>

@@ -218,6 +218,31 @@ export interface TimeEntry {
   description?: string;
   billable: boolean;
   created_at: string;
+  // Set once this entry has been included on a generated invoice (see
+  // migration 0025) — null/undefined means still unbilled. This is the
+  // ONLY thing that changes about an entry when it's invoiced; the
+  // unbilled-time signal (lib/riskSignals.ts's findUnbilledMatters) is
+  // never edited to know about this — callers filter it out upstream.
+  invoice_id?: string | null;
+}
+
+// A generated invoice PDF's metadata — see migration 0025. The PDF
+// itself lives in the matter-documents storage bucket at `storage_path`;
+// this row is what makes it retrievable and queryable later, not a
+// one-time download. total_minutes/total_amount are a SNAPSHOT taken at
+// generation time (denormalized on purpose — see the migration), not a
+// live recomputation from the covered time entries.
+export interface Invoice {
+  id: string;
+  matter_id: string;
+  invoice_number: string;
+  issued_date: string;
+  total_minutes: number;
+  total_amount: number | null;
+  currency: string | null;
+  storage_path: string;
+  created_by?: string | null;
+  created_at: string;
 }
 
 export interface Insight {

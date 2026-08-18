@@ -203,7 +203,13 @@ export function buildUrgentActions(input: ActionInputs, now = Date.now()): Urgen
   // Detection lives in riskSignals.ts's findUnbilledMatters -- the Time
   // screen's own banner reads from the exact same function, so the two
   // surfaces can't disagree about which matters qualify.
-  for (const u of findUnbilledMatters(matters, timeEntries, now)) {
+  //
+  // Entries already covered by a generated invoice (see lib/invoice.ts /
+  // migration 0025) are filtered out HERE, at the call site -- never
+  // inside findUnbilledMatters itself, which stays untouched. Same filter
+  // TimeEntriesScreen.tsx applies before its own call, so Command Center
+  // and Time can never disagree about which entries still count.
+  for (const u of findUnbilledMatters(matters, timeEntries.filter(t => !t.invoice_id), now)) {
     out.push({
       id: `unbilled-${u.matter.id}`,
       consequence: 'revenue',

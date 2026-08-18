@@ -4,8 +4,9 @@ import { useAuth } from './auth';
 import { useToast } from './toast';
 import { attorneys as mockAttorneys } from '../data/attorneys';
 import { deadlineRules as mockDeadlineRules } from '../data/deadlineRules';
-import { Attorney, PracticeArea, MatterStage, Party, ConflictCheck, Matter, Deadline, Insight, LawDocument, Firm, DeadlineRule, ImportBatch, TimeEntry, MatterCommunication, AuditLogEntry, ClientInvite, ClientUser, SignatureRequest, MatterParty, MatterPartyRole, PartyRelationship } from '../types';
+import { Attorney, PracticeArea, MatterStage, Party, ConflictCheck, Matter, Deadline, Insight, LawDocument, Firm, DeadlineRule, ImportBatch, TimeEntry, MatterCommunication, AuditLogEntry, ClientInvite, ClientUser, SignatureRequest, MatterParty, MatterPartyRole, PartyRelationship, Invoice } from '../types';
 import { analyseConflict } from './conflictSignals';
+import { generateInvoicePdf } from './invoice';
 
 interface StoreState {
   loading: boolean;
@@ -28,6 +29,9 @@ interface StoreState {
   deadlineRules: DeadlineRule[];
   importBatches: ImportBatch[];
   timeEntries: TimeEntry[];
+  // Generated invoice records (see migration 0025) -- metadata + storage
+  // path only, the PDF itself lives in the matter-documents bucket.
+  invoices: Invoice[];
   communications: MatterCommunication[];
   // Who-changed-what-when across the 6 audited tables (see migration
   // 0016) — written only by database triggers, this is purely a read
@@ -74,6 +78,7 @@ interface StoreActions {
   addTimeEntry: (entry: Omit<TimeEntry, 'id' | 'created_at' | 'created_by' | 'currency'>) => Promise<{ error?: string }>;
   updateTimeEntry: (id: string, patch: Partial<Pick<TimeEntry, 'matter_id' | 'attorney_id' | 'date' | 'duration_minutes' | 'rate' | 'description' | 'billable'>>) => Promise<{ error?: string }>;
   deleteTimeEntry: (id: string) => Promise<void>;
+  generateInvoice: (matterId: string, entryIds: string[]) => Promise<{ invoice?: Invoice; error?: string }>;
   refreshIntegrations: () => Promise<void>;
   pushDeadlineToCalendar: (deadlineId: string) => Promise<{ error?: string }>;
   sendMatterCommunication: (input: { matter_id: string; sent_to: string; subject: string; body: string }) => Promise<{ error?: string }>;
@@ -133,6 +138,7 @@ function loadMockData(): Omit<StoreState, 'loading' | 'error' | 'hasLoadedOnce'>
     deadlineRules: mockDeadlineRules,
     importBatches: [],
     timeEntries: [],
+    invoices: [],
     communications: [],
     auditLog: [],
     clientInvites: [],
@@ -142,7 +148,7 @@ function loadMockData(): Omit<StoreState, 'loading' | 'error' | 'hasLoadedOnce'>
 }
 
 async function loadAll(firmId: string): Promise<Omit<StoreState, 'loading' | 'error' | 'hasLoadedOnce' | 'integrationConnections'>> {
-  const [firmR, attorneysR, practiceAreasR, matterStagesR, partiesR, conflictChecksR, mattersR, deadlinesR, insightsR, documentsR, agentRequestsR, deadlineRulesR, importBatchesR, timeEntriesR, communicationsR, auditLogR, clientInvitesR, clientUsersR, signatureRequestsR, matterPartiesR, partyRelationshipsR] = await Promise.all([
+  const [firmR, attorneysR, practiceAreasR, matterStagesR, partiesR, conflictChecksR, mattersR, deadlinesR, insightsR, documentsR, agentRequestsR, deadlineRulesR, importBatchesR, timeEntriesR, communicationsR, auditLogR, clientInvitesR, clientUsersR, signatureRequestsR, matterPartiesR, partyRelationshipsR, invoicesR] = await Promise.all([
     supabase.from('firms').select('id,name,country,region,currency,locale').eq('id', firmId).single(),
     supabase.from('attorneys').select('*').eq('firm_id', firmId).order('name'),
     supabase.from('practice_areas').select('*').eq('firm_id', firmId),
@@ -189,6 +195,10 @@ async function loadAll(firmId: string): Promise<Omit<StoreState, 'loading' | 'er
     // party_relationships is 0022. Both degrade to empty if unmigrated.
     supabase.from('matter_parties').select('*'),
     supabase.from('party_relationships').select('*').eq('firm_id', firmId),
+    // Generated invoices (see migration 0025) -- graceful degrade like
+    // every other post-launch table above, since the frontend can ship
+    // ahead of the migration being applied.
+    supabase.from('invoices').select('*').eq('firm_id', firmId).order('created_at', { ascending: false }),
   ]);
 
   const firm = firmR.error ? null : (firmR.data as Firm ?? null); // degrade gracefully if not yet migrated / row missing
@@ -215,6 +225,7 @@ async function loadAll(firmId: string): Promise<Omit<StoreState, 'loading' | 'er
   const signatureRequestsRaw = signatureRequestsR.error ? [] : (signatureRequestsR.data ?? []);
   const matterPartiesRaw = matterPartiesR.error ? [] : (matterPartiesR.data ?? []);
   const partyRelationshipsRaw = partyRelationshipsR.error ? [] : (partyRelationshipsR.data ?? []);
+  const invoicesRaw = invoicesR.error ? [] : (invoicesR.data ?? []);
 
   return {
     firm,
@@ -234,6 +245,7 @@ async function loadAll(firmId: string): Promise<Omit<StoreState, 'loading' | 'er
     deadlineRules: deadlineRulesRaw as DeadlineRule[],
     importBatches: importBatchesRaw as ImportBatch[],
     timeEntries: timeEntriesRaw as TimeEntry[],
+    invoices: invoicesRaw as Invoice[],
     communications: communicationsRaw as MatterCommunication[],
     auditLog: auditLogRaw as AuditLogEntry[],
     clientInvites: clientInvitesRaw as ClientInvite[],
@@ -276,7 +288,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const [state, setState] = useState<StoreState>({
     loading: true, error: null, hasLoadedOnce: false,
-    firm: null, attorneys: [], practiceAreas: [], matterStages: [], parties: [], conflictChecks: [], matters: [], deadlines: [], insights: [], documents: [], signatureRequests: [], matterParties: [], partyRelationships: [], agentRequests: [], deadlineRules: [], importBatches: [], timeEntries: [], communications: [], auditLog: [], clientInvites: [], clientUsers: [], integrationConnections: null,
+    firm: null, attorneys: [], practiceAreas: [], matterStages: [], parties: [], conflictChecks: [], matters: [], deadlines: [], insights: [], documents: [], signatureRequests: [], matterParties: [], partyRelationships: [], agentRequests: [], deadlineRules: [], importBatches: [], timeEntries: [], invoices: [], communications: [], auditLog: [], clientInvites: [], clientUsers: [], integrationConnections: null,
   });
 
   const mattersRef = useRef(state.matters);
@@ -793,6 +805,89 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     showToast('success', 'Time entry deleted.');
   }, [refresh]);
 
+  // Real invoice generation from unbilled time (product-audit Gap 2). The
+  // PDF (see lib/invoice.ts) is the single source of what an invoice
+  // says; this action's own job is just: build it, save it, and mark the
+  // covered entries so they drop out of findUnbilledMatters immediately
+  // (via the invoice_id filter callers apply upstream -- see
+  // TimeEntriesScreen.tsx / urgentActions.ts -- never by editing that
+  // detector itself).
+  const generateInvoice = useCallback(async (matterId: string, entryIds: string[]) => {
+    const matter = state.matters.find(m => m.id === matterId);
+    const entries = state.timeEntries.filter(t => entryIds.includes(t.id));
+    if (!matter || entries.length === 0) return { error: 'Nothing to invoice' };
+
+    const clientName = state.parties.find(p => p.id === matter.client_party_id)?.name ?? 'Client';
+    const firmName = state.firm?.name ?? 'Law Firm';
+    const currency = state.firm?.currency ?? entries[0]?.currency ?? null;
+    const locale = state.firm?.locale ?? 'en-US';
+    const issuedDate = new Date().toISOString().slice(0, 10);
+    // Firm-scoped and readable rather than a strict DB sequence -- a
+    // small race risk if two people generate at the exact same moment is
+    // an acceptable tradeoff this phase doesn't need to engineer around.
+    const invoiceNumber = `INV-${issuedDate.replace(/-/g, '')}-${String(state.invoices.length + 1).padStart(4, '0')}`;
+
+    const { blob, totalMinutes, totalAmount } = generateInvoicePdf({
+      invoiceNumber, issuedDate, firmName, clientName, matterTitle: matter.title, currency, locale,
+      entries: entries.map(e => ({ id: e.id, date: e.date, description: e.description, duration_minutes: e.duration_minutes, rate: e.rate })),
+    });
+
+    if (!isSupabaseConfigured) {
+      const invoice: Invoice = {
+        id: `local-invoice-${Date.now()}`, matter_id: matterId, invoice_number: invoiceNumber, issued_date: issuedDate,
+        total_minutes: totalMinutes, total_amount: totalAmount, currency, storage_path: `local/${invoiceNumber}.pdf`,
+        created_by: profile?.id ?? null, created_at: new Date().toISOString(),
+      };
+      setState(s => ({
+        ...s,
+        invoices: [invoice, ...s.invoices],
+        timeEntries: s.timeEntries.map(t => entryIds.includes(t.id) ? { ...t, invoice_id: invoice.id } : t),
+      }));
+      // Preview mode has nowhere real to persist the file, but generation
+      // itself needs no backend -- hand over a genuinely real PDF anyway.
+      window.open(URL.createObjectURL(blob), '_blank');
+      showToast('success', 'Invoice generated (preview mode — the PDF is real, but nothing persists here).');
+      return { invoice };
+    }
+
+    const path = `${firmId}/${matterId}/invoices/${invoiceNumber}.pdf`;
+    const { error: uploadError } = await supabase.storage.from('matter-documents').upload(path, blob, { contentType: 'application/pdf' });
+    if (uploadError) {
+      showToast('error', "Couldn't save the invoice — try again.");
+      return { error: uploadError.message };
+    }
+    const { data, error } = await supabase.from('invoices').insert({
+      firm_id: firmId, matter_id: matterId, invoice_number: invoiceNumber, issued_date: issuedDate,
+      total_minutes: totalMinutes, total_amount: totalAmount, currency, storage_path: path, created_by: profile?.id ?? null,
+    }).select().single();
+    if (error || !data) {
+      await supabase.storage.from('matter-documents').remove([path]);
+      showToast('error', "Couldn't save the invoice — try again.");
+      return { error: error?.message };
+    }
+    const invoice = data as Invoice;
+
+    const { error: linkError } = await supabase.from('time_entries').update({ invoice_id: invoice.id }).in('id', entryIds);
+    if (linkError) {
+      // The invoice itself IS real and saved at this point -- only the
+      // entry-linking step failed. Surfacing this as a distinct message
+      // matters: a generic "failed" toast here would wrongly suggest no
+      // invoice was created, when one genuinely was.
+      console.error('[store] generateInvoice: invoice saved but linking entries failed:', linkError);
+      showToast('error', 'Invoice saved, but marking the covered time entries failed — they may still show as unbilled. Try again or mark them manually.');
+      setState(s => ({ ...s, invoices: [invoice, ...s.invoices] }));
+      return { invoice, error: linkError.message };
+    }
+
+    setState(s => ({
+      ...s,
+      invoices: [invoice, ...s.invoices],
+      timeEntries: s.timeEntries.map(t => entryIds.includes(t.id) ? { ...t, invoice_id: invoice.id } : t),
+    }));
+    showToast('success', `Invoice ${invoiceNumber} generated.`);
+    return { invoice };
+  }, [firmId, profile, state.matters, state.timeEntries, state.parties, state.firm, state.invoices]);
+
   // Calendar + Gmail integration, pass 1 (see migration 0015). One shared
   // status check rather than each screen (Deadlines, matter email compose)
   // running its own — so "is Gmail connected?" never disagrees between
@@ -995,7 +1090,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   return (
     <StoreContext.Provider value={{
       ...state,
-      refresh, updateFirm, addPracticeArea, updatePracticeArea, addParty, runConflictCheck, clearConflictCheck, addMatter, addMatterParty, removeMatterParty, updateMatterStage, updateMatterAttorney, linkMatterConflictCheck, addDeadline, updateDeadline, addInsights, uploadDocument, deleteDocument, requestAgent, removeAgentRequest, commitImportBatch, removeImportBatch, addTimeEntry, updateTimeEntry, deleteTimeEntry, refreshIntegrations, pushDeadlineToCalendar, sendMatterCommunication, inviteClientToPortal, setDocumentClientVisible, sendForSignature, refreshSignatureStatus, cancelSignatureRequest,
+      refresh, updateFirm, addPracticeArea, updatePracticeArea, addParty, runConflictCheck, clearConflictCheck, addMatter, addMatterParty, removeMatterParty, updateMatterStage, updateMatterAttorney, linkMatterConflictCheck, addDeadline, updateDeadline, addInsights, uploadDocument, deleteDocument, requestAgent, removeAgentRequest, commitImportBatch, removeImportBatch, addTimeEntry, updateTimeEntry, deleteTimeEntry, generateInvoice, refreshIntegrations, pushDeadlineToCalendar, sendMatterCommunication, inviteClientToPortal, setDocumentClientVisible, sendForSignature, refreshSignatureStatus, cancelSignatureRequest,
     }}>
       {children}
     </StoreContext.Provider>

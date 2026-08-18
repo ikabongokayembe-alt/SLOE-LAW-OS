@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
 import { useStore } from '../../lib/store';
-import { Clock, Plus, Download, Pencil, Trash2, Banknote } from 'lucide-react';
+import { useAuth } from '../../lib/auth';
+import { supabase } from '../../lib/supabase';
+import { Clock, Plus, Download, Pencil, Trash2, Banknote, FileText } from 'lucide-react';
 import { formatDateOnly } from '../../lib/dates';
 import { computeAmount, formatAmount, formatHours } from '../../lib/timeEntries';
 import { findUnbilledMatters } from '../../lib/riskSignals';
@@ -13,7 +15,8 @@ import { TimeEntry } from '../../types';
 // export below IS the entire "invoicing" story for this phase; a firm
 // takes it to whatever they already use to actually bill a client.
 export function TimeEntriesScreen() {
-  const { timeEntries, matters, attorneys, firm, deleteTimeEntry } = useStore();
+  const { timeEntries, matters, attorneys, firm, deleteTimeEntry, generateInvoice } = useStore();
+  const { isDevMode } = useAuth();
   const locale = firm?.locale || 'en-US';
 
   const [matterFilter, setMatterFilter] = useState('all');
@@ -21,6 +24,7 @@ export function TimeEntriesScreen() {
   const [toDate, setToDate] = useState('');
   const [showLog, setShowLog] = useState(false);
   const [editingEntry, setEditingEntry] = useState<TimeEntry | null>(null);
+  const [invoicingMatterId, setInvoicingMatterId] = useState<string | null>(null);
 
   const matterTitle = (id: string) => matters.find(m => m.id === id)?.title ?? '—';
   const attorneyName = (id: string | null) => attorneys.find(a => a.id === id)?.name ?? 'Unassigned';
@@ -30,7 +34,30 @@ export function TimeEntriesScreen() {
   // urgentActions.ts so both surfaces read one computation) -- billable
   // time that's sat unrecorded-as-invoiced for a while. Shown here where
   // billing actually happens, not just as a Command Center card.
-  const unbilled = useMemo(() => findUnbilledMatters(matters, timeEntries), [matters, timeEntries]);
+  //
+  // Entries already covered by a generated invoice are filtered out HERE,
+  // at the call site -- never inside findUnbilledMatters itself, which
+  // stays untouched. Once an invoice exists, its entries are billed, not
+  // unbilled; recomputing this after generateInvoice sets invoice_id is
+  // what makes the finding disappear immediately, the same "recompute
+  // reflects reality" discipline used everywhere else this session.
+  const unbilledTimeEntries = useMemo(() => timeEntries.filter(t => !t.invoice_id), [timeEntries]);
+  const unbilled = useMemo(() => findUnbilledMatters(matters, unbilledTimeEntries), [matters, unbilledTimeEntries]);
+
+  const handleGenerateInvoice = async (matterId: string) => {
+    const entryIds = unbilledTimeEntries.filter(t => t.matter_id === matterId && t.billable).map(t => t.id);
+    if (entryIds.length === 0) return;
+    setInvoicingMatterId(matterId);
+    const result = await generateInvoice(matterId, entryIds);
+    setInvoicingMatterId(null);
+    // Dev-data mode already opens the generated PDF itself (see
+    // store.tsx's generateInvoice) -- there's no real backend to fetch a
+    // signed URL from here in that mode.
+    if (result.invoice && !isDevMode) {
+      const { data } = await supabase.storage.from('matter-documents').createSignedUrl(result.invoice.storage_path, 60);
+      if (data) window.open(data.signedUrl, '_blank');
+    }
+  };
 
   const filtered = useMemo(() => {
     return timeEntries
@@ -103,20 +130,30 @@ export function TimeEntriesScreen() {
       {unbilled.length > 0 && (
         <div className="mb-6 space-y-2">
           {unbilled.slice(0, 3).map(u => (
-            // Clicking filters straight to that matter's entries, same
-            // click-to-filter affordance as Documents' gap banner.
-            <button
+            <div
               key={u.matter.id}
-              onClick={() => setMatterFilter(u.matter.id)}
-              className="w-full text-left bg-[var(--bg-secondary)] border border-[var(--accent-primary)]/30 rounded-lg px-4 py-3 hover:border-[var(--accent-primary)]/60 transition-colors"
+              className="flex items-center justify-between gap-3 bg-[var(--bg-secondary)] border border-[var(--accent-primary)]/30 rounded-lg px-4 py-3"
             >
-              <div className="flex items-center gap-1.5 text-sm font-medium">
-                <Banknote className="w-3.5 h-3.5 text-[var(--accent-primary)] shrink-0" /> {u.matter.title}
-              </div>
-              <div className="text-xs text-[var(--text-tertiary)] mt-0.5">
-                {(u.minutes / 60).toFixed(1)} billable hours recorded, oldest entry {u.ageDays} day{u.ageDays === 1 ? '' : 's'} old — not yet invoiced.
-              </div>
-            </button>
+              {/* Clicking the label filters straight to that matter's
+                  entries, same click-to-filter affordance as Documents'
+                  gap banner -- a sibling button, not nested, so it can
+                  sit next to the real "do something about it" action. */}
+              <button onClick={() => setMatterFilter(u.matter.id)} className="text-left min-w-0 hover:opacity-80 transition-opacity">
+                <div className="flex items-center gap-1.5 text-sm font-medium">
+                  <Banknote className="w-3.5 h-3.5 text-[var(--accent-primary)] shrink-0" /> {u.matter.title}
+                </div>
+                <div className="text-xs text-[var(--text-tertiary)] mt-0.5">
+                  {(u.minutes / 60).toFixed(1)} billable hours recorded, oldest entry {u.ageDays} day{u.ageDays === 1 ? '' : 's'} old — not yet invoiced.
+                </div>
+              </button>
+              <button
+                onClick={() => handleGenerateInvoice(u.matter.id)}
+                disabled={invoicingMatterId === u.matter.id}
+                className="h-8 px-3 flex items-center gap-1.5 text-xs font-medium bg-[var(--text-primary)] text-[var(--bg-primary)] rounded hover:opacity-90 transition-opacity disabled:opacity-60 shrink-0"
+              >
+                <FileText className="w-3.5 h-3.5" /> {invoicingMatterId === u.matter.id ? 'Generating…' : 'Generate invoice'}
+              </button>
+            </div>
           ))}
         </div>
       )}
@@ -172,6 +209,7 @@ export function TimeEntriesScreen() {
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="text-sm font-medium">{matterTitle(t.matter_id)}</span>
                       {!t.billable && <span className="text-[10px] uppercase px-1.5 py-0.5 bg-[var(--bg-tertiary)] text-[var(--text-tertiary)] rounded-full shrink-0">Non-billable</span>}
+                      {t.invoice_id && <span className="text-[10px] uppercase px-1.5 py-0.5 bg-[var(--signal-positive)]/15 text-[var(--signal-positive)] rounded-full shrink-0">Invoiced</span>}
                     </div>
                     <div className="text-xs text-[var(--text-tertiary)] truncate">
                       {attorneyName(t.attorney_id)} · {t.description || 'No description'}
