@@ -20,13 +20,13 @@ function daysUntil(dateStr: string): number {
 // contradicts its own figure is worse than no trend.
 function StatStrip({ items }: { items: { label: string; value: number; to: string; alarming?: boolean }[] }) {
   return (
-    <div className="flex flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3 bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg">
+    <div className="flex flex-wrap items-center gap-x-6 gap-y-1.5">
       {items.map(s => (
-        <Link key={s.label} to={s.to} className="group flex items-baseline gap-2 min-w-0">
-          <span className={`text-sm font-medium tabular-nums ${s.alarming && s.value > 0 ? 'text-[var(--signal-negative)]' : 'text-[var(--text-primary)]'}`}>
+        <Link key={s.label} to={s.to} className="group flex items-baseline gap-1.5 min-w-0">
+          <span className={`text-xs font-medium tabular-nums ${s.alarming && s.value > 0 ? 'text-[var(--signal-negative)]' : 'text-[var(--text-secondary)]'}`}>
             {s.value}
           </span>
-          <span className="text-xs text-[var(--text-tertiary)] group-hover:text-[var(--text-secondary)] transition-colors truncate">
+          <span className="text-[11px] text-[var(--text-tertiary)] group-hover:text-[var(--text-secondary)] transition-colors truncate">
             {s.label}
           </span>
         </Link>
@@ -279,17 +279,14 @@ export function DashboardScreen() {
   };
 
   return (
-    <div className="flex flex-col space-y-5 max-w-4xl">
+    <div className="flex flex-col space-y-6 max-w-4xl">
       {/* The decisions lead. Counts follow. Recent Matters is gone from
           this screen on purpose: it duplicated the Matters board while
           telling nobody anything they had to act on, and the actions
           below already name the matters that need attention. Removing
           noise, not substance — the full list is one click away. */}
       <div>
-        <h2 className="text-xl font-medium mb-1">What needs a decision</h2>
-        <p className="text-sm text-[var(--text-secondary)] mb-2">
-          Grouped by consequence — professional risk first, then revenue, then client relationships.
-        </p>
+        <h2 className="text-xl font-semibold mb-1.5">What needs a decision</h2>
         <GroundingNotice />
       </div>
 
@@ -365,24 +362,33 @@ export function DashboardScreen() {
         </div>
       )}
 
-      <StatStrip items={stats} />
+      {/* Everything below this line is background context, not a
+          decision -- deliberately demoted to plain rows behind a single
+          hairline divider instead of three separate bordered cards using
+          the exact same visual weight as the real finding cards above.
+          Command Center scored lowest on Clarity in the product audit
+          specifically because this zone used to compete with those cards
+          instead of receding behind them. */}
+      <div className="pt-5 border-t border-[var(--border-subtle)] space-y-4">
+        <StatStrip items={stats} />
 
-      <button
-        onClick={handleAsk}
-        className="w-full flex items-center gap-3 bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg p-4 text-left hover:border-[var(--border-strong)] transition-colors"
-      >
-        <Sparkles className="w-4 h-4 text-[var(--accent-secondary)] shrink-0" />
-        <input
-          value={query}
-          onChange={e => setQuery(e.target.value)}
-          onClick={e => e.stopPropagation()}
-          onKeyDown={e => e.key === 'Enter' && handleAsk()}
-          placeholder="Ask the Analyst something about your caseload…"
-          className="flex-1 bg-transparent text-sm focus:outline-none placeholder:italic"
-        />
-      </button>
+        <button
+          onClick={handleAsk}
+          className="w-full flex items-center gap-2.5 bg-[var(--bg-tertiary)] rounded-full h-9 px-4 text-left hover:bg-[var(--bg-elevated)] transition-colors"
+        >
+          <Sparkles className="w-3.5 h-3.5 text-[var(--accent-secondary)] shrink-0" />
+          <input
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            onClick={e => e.stopPropagation()}
+            onKeyDown={e => e.key === 'Enter' && handleAsk()}
+            placeholder="Ask the Analyst something about your caseload…"
+            className="flex-1 bg-transparent text-xs focus:outline-none placeholder:italic"
+          />
+        </button>
 
-      <AgentLibraryTeaserCard />
+        <AgentLibraryTeaserCard />
+      </div>
     </div>
   );
 }
