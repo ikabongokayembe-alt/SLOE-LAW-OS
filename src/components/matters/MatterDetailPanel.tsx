@@ -2,7 +2,9 @@ import { useMemo, useState } from 'react';
 import { Matter, MatterPartyRole } from '../../types';
 import { useStore } from '../../lib/store';
 import { useAuth } from '../../lib/auth';
+import { useToast } from '../../lib/toast';
 import { supabase } from '../../lib/supabase';
+import { buildLawPayPaymentLink } from '../../lib/lawpay';
 import { DetailPanel, DetailSection } from '../shared/DetailPanel';
 import { ConflictCheckDetailContent } from '../parties/ConflictCheckDetail';
 import { DocumentPreviewPanel } from '../documents/DocumentPreview';
@@ -10,7 +12,7 @@ import { findBottlenecks, assessDeadlineRisk, findDocumentGaps } from '../../lib
 import { buildUrgentActions } from '../../lib/urgentActions';
 import { formatDateOnly } from '../../lib/dates';
 import { computeAmount, formatAmount, formatHours } from '../../lib/timeEntries';
-import { AlertTriangle, Clock, FileText, ShieldCheck, ShieldAlert, UserPlus, X, Receipt } from 'lucide-react';
+import { AlertTriangle, Clock, FileText, ShieldCheck, ShieldAlert, UserPlus, X, Receipt, Link2, CheckCircle2 } from 'lucide-react';
 
 const ROLE_LABEL: Record<MatterPartyRole, string> = {
   client: 'Client', opposing: 'Opposing', witness: 'Witness', co_counsel: 'Co-counsel', other: 'Other',
@@ -27,9 +29,11 @@ const ROLE_LABEL: Record<MatterPartyRole, string> = {
 export function MatterDetailPanel({ matter, onClose }: { matter: Matter; onClose: () => void }) {
   const {
     matterStages, practiceAreas, attorneys, parties, matters, deadlines, conflictChecks, documents, timeEntries, invoices,
-    communications, auditLog, matterParties, partyRelationships, addMatterParty, removeMatterParty, deleteDocument, setDocumentClientVisible, firm,
+    communications, auditLog, matterParties, partyRelationships, addMatterParty, removeMatterParty, deleteDocument, setDocumentClientVisible, markInvoicePaid, firm,
   } = useStore();
   const { isDevMode } = useAuth();
+  const { showToast } = useToast();
+  const [markingPaidId, setMarkingPaidId] = useState<string | null>(null);
   const locale = firm?.locale || 'en-US';
 
   const [addPartyId, setAddPartyId] = useState('');
@@ -97,6 +101,25 @@ export function MatterDetailPanel({ matter, onClose }: { matter: Matter; onClose
       if (error || !data) return;
       window.open(data.signedUrl, '_blank');
     }
+  };
+
+  // LawPay hosted payment page link -- see lib/lawpay.ts. Real prerequisite,
+  // not a code gap: null until this firm has a real LawPay account and
+  // has entered its payment page URL in Firm Settings.
+  const handleCopyPaymentLink = async (invoiceId: string) => {
+    const invoice = matterInvoices.find(i => i.id === invoiceId);
+    if (!invoice || !firm) return;
+    const link = buildLawPayPaymentLink(firm, invoice, clientParty);
+    if (!link) { showToast('error', 'No LawPay payment page configured yet — add one in Firm Settings.'); return; }
+    try { await navigator.clipboard.writeText(link); showToast('success', 'Payment link copied to clipboard.'); }
+    catch { showToast('error', "Couldn't copy the link — clipboard unavailable."); }
+  };
+
+  const handleMarkPaid = async (invoiceId: string) => {
+    if (!confirm('Mark this invoice as paid? Only do this once payment is actually confirmed (e.g. checked in your LawPay dashboard).')) return;
+    setMarkingPaidId(invoiceId);
+    await markInvoicePaid(invoiceId);
+    setMarkingPaidId(null);
   };
 
   const previewDoc = previewDocId ? matterDocuments.find(d => d.id === previewDocId) ?? null : null;
@@ -248,20 +271,48 @@ export function MatterDetailPanel({ matter, onClose }: { matter: Matter; onClose
           ) : (
             <div className="space-y-1.5">
               {matterInvoices.map(inv => (
-                <button
-                  key={inv.id}
-                  onClick={() => handleDownload(inv.storage_path, `${inv.invoice_number}.pdf`)}
-                  className="w-full flex items-center justify-between gap-2 text-sm bg-[var(--bg-tertiary)] rounded px-2 py-1.5 text-left hover:bg-[var(--bg-elevated)] transition-colors"
-                >
-                  <span className="flex items-center gap-1.5 min-w-0">
-                    <Receipt className="w-3.5 h-3.5 text-[var(--text-tertiary)] shrink-0" />
-                    <span className="truncate">{inv.invoice_number}</span>
-                  </span>
-                  <span className="text-xs text-[var(--text-tertiary)] shrink-0 ml-2">
-                    {formatDateOnly(inv.issued_date, locale, { day: 'numeric', month: 'short', year: 'numeric' })}
-                    {inv.total_amount !== null && <> · {formatAmount(inv.total_amount, inv.currency, locale)}</>}
-                  </span>
-                </button>
+                <div key={inv.id} className="bg-[var(--bg-tertiary)] rounded-lg px-2.5 py-2">
+                  <button
+                    onClick={() => handleDownload(inv.storage_path, `${inv.invoice_number}.pdf`)}
+                    className="w-full flex items-center justify-between gap-2 text-sm text-left hover:opacity-80 transition-opacity"
+                  >
+                    <span className="flex items-center gap-1.5 min-w-0">
+                      <Receipt className="w-3.5 h-3.5 text-[var(--text-tertiary)] shrink-0" />
+                      <span className="truncate">{inv.invoice_number}</span>
+                      {inv.status === 'paid' ? (
+                        <span className="flex items-center gap-1 text-[10px] uppercase tracking-wider text-[var(--signal-positive)] bg-[var(--signal-positive)]/10 rounded-full px-1.5 py-0.5 shrink-0">
+                          <CheckCircle2 className="w-2.5 h-2.5" /> Paid
+                        </span>
+                      ) : (
+                        <span className="text-[10px] uppercase tracking-wider text-[var(--text-tertiary)] bg-[var(--bg-secondary)] rounded-full px-1.5 py-0.5 shrink-0">Unpaid</span>
+                      )}
+                    </span>
+                    <span className="text-xs text-[var(--text-tertiary)] shrink-0 ml-2">
+                      {formatDateOnly(inv.issued_date, locale, { day: 'numeric', month: 'short', year: 'numeric' })}
+                      {inv.total_amount !== null && <> · {formatAmount(inv.total_amount, inv.currency, locale)}</>}
+                    </span>
+                  </button>
+                  {inv.status === 'unpaid' && (
+                    <div className="flex items-center gap-3 mt-1.5 pl-5">
+                      <button onClick={() => handleCopyPaymentLink(inv.id)} className="flex items-center gap-1 text-[11px] text-[var(--accent-secondary)] hover:underline">
+                        <Link2 className="w-3 h-3" /> Copy payment link
+                      </button>
+                      <button
+                        onClick={() => handleMarkPaid(inv.id)}
+                        disabled={markingPaidId === inv.id}
+                        className="flex items-center gap-1 text-[11px] text-[var(--text-tertiary)] hover:text-[var(--signal-positive)] disabled:opacity-40"
+                      >
+                        <CheckCircle2 className="w-3 h-3" /> {markingPaidId === inv.id ? 'Marking…' : 'Mark as paid'}
+                      </button>
+                    </div>
+                  )}
+                  {inv.status === 'paid' && inv.paid_at && (
+                    <div className="text-[11px] text-[var(--text-tertiary)] mt-1 pl-5">
+                      Paid {new Date(inv.paid_at).toLocaleDateString(locale, { day: 'numeric', month: 'short', year: 'numeric' })}
+                      {inv.lawpay_charge_id ? ' — confirmed via LawPay' : ' — recorded manually'}
+                    </div>
+                  )}
+                </div>
               ))}
             </div>
           )}

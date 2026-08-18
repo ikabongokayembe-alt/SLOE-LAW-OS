@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useStore } from '../../lib/store';
 import { useToast } from '../../lib/toast';
-import { Settings, Plus, FileUp, ChevronRight, Copy, RotateCw, UserPlus } from 'lucide-react';
+import { Settings, Plus, FileUp, ChevronRight, Copy, RotateCw, UserPlus, CreditCard } from 'lucide-react';
 
 function slugify(label: string): string {
   return label.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
@@ -16,6 +16,8 @@ export function SettingsScreen() {
   const { firm, updateFirm, regenerateIntakeToken, practiceAreas, addPracticeArea, updatePracticeArea } = useStore();
   const { showToast } = useToast();
   const [regeneratingIntake, setRegeneratingIntake] = useState(false);
+  const [lawpayUrl, setLawpayUrl] = useState('');
+  const [savingLawpay, setSavingLawpay] = useState(false);
   const [country, setCountry] = useState('');
   const [region, setRegion] = useState('');
   const [currency, setCurrency] = useState('');
@@ -32,6 +34,7 @@ export function SettingsScreen() {
     setRegion(firm?.region ?? '');
     setCurrency(firm?.currency ?? '');
     setLocale(firm?.locale ?? '');
+    setLawpayUrl(firm?.lawpay_payment_page_url ?? '');
   }, [firm]);
 
   const dirty = firm && (
@@ -59,6 +62,14 @@ export function SettingsScreen() {
     setToggleBusyId(id);
     await updatePracticeArea(id, { is_active: !current });
     setToggleBusyId(null);
+  };
+
+  const lawpayDirty = firm && lawpayUrl !== (firm.lawpay_payment_page_url ?? '');
+  const handleSaveLawpay = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingLawpay(true);
+    await updateFirm({ lawpay_payment_page_url: lawpayUrl.trim() || null });
+    setSavingLawpay(false);
   };
 
   const intakeLink = firm?.intake_token ? `${window.location.origin}/intake?token=${firm.intake_token}` : '';
@@ -270,6 +281,33 @@ export function SettingsScreen() {
             </>
           )}
         </div>
+      </div>
+
+      <div className="mt-8">
+        <h3 className="text-sm font-medium mb-1">Payment Collection (LawPay)</h3>
+        <p className="text-xs text-[var(--text-secondary)] mb-3">
+          Paste your firm's LawPay hosted payment page link — found in your LawPay account under Payments. Once set, every generated invoice gets a real payment link. Card details are entered on LawPay's own page and never pass through Law OS, which is the entire reason this is an integration rather than a built-in payment form.
+        </p>
+        <form onSubmit={handleSaveLawpay} className="border border-[var(--border-subtle)] rounded-lg p-4 space-y-3">
+          <div>
+            <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">LawPay payment page URL</label>
+            <input
+              type="url" value={lawpayUrl} onChange={e => setLawpayUrl(e.target.value)}
+              placeholder="https://secure.lawpay.com/pay/yourfirm"
+              className="w-full h-9 px-3 bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded text-sm focus:outline-none"
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <CreditCard className="w-3.5 h-3.5 text-[var(--text-tertiary)] shrink-0" />
+            <button
+              type="submit" disabled={savingLawpay || !lawpayDirty}
+              className="h-8 px-3 bg-[var(--text-primary)] text-[var(--bg-primary)] rounded text-xs font-medium hover:opacity-90 transition-opacity disabled:opacity-40"
+            >
+              {savingLawpay ? 'Saving…' : 'Save'}
+            </button>
+            {!firm?.lawpay_payment_page_url && <span className="text-[11px] text-[var(--text-tertiary)]">No LawPay account connected yet — payment links won't appear on invoices until this is set.</span>}
+          </div>
+        </form>
       </div>
 
       <div className="mt-8">

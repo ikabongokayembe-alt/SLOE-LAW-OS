@@ -20,6 +20,11 @@ export interface Firm {
   // reusable (unlike the one-time invite tokens elsewhere), regenerable
   // from Firm Settings if it leaks.
   intake_token?: string;
+  // The firm's real LawPay hosted-payment-page base URL (see migration
+  // 0027) — e.g. "https://secure.lawpay.com/pay/yourfirm". Not a secret;
+  // it's the literal public link a client is meant to click. Null until
+  // a firm with a real LawPay account enters it in Firm Settings.
+  lawpay_payment_page_url?: string | null;
 }
 
 export interface PracticeArea {
@@ -237,6 +242,8 @@ export interface TimeEntry {
 // one-time download. total_minutes/total_amount are a SNAPSHOT taken at
 // generation time (denormalized on purpose — see the migration), not a
 // live recomputation from the covered time entries.
+export type InvoiceStatus = 'unpaid' | 'paid';
+
 export interface Invoice {
   id: string;
   matter_id: string;
@@ -248,6 +255,15 @@ export interface Invoice {
   storage_path: string;
   created_by?: string | null;
   created_at: string;
+  // LawPay payment tracking (see migration 0027). status defaults
+  // 'unpaid'; flips to 'paid' either via lawpay-webhook (a real,
+  // LawPay-confirmed payment -- lawpay_charge_id set) or the manual
+  // "Mark as paid" staff fallback (marked_paid_by set instead) — see
+  // store.tsx's markInvoicePaid for why both paths exist.
+  status: InvoiceStatus;
+  paid_at?: string | null;
+  lawpay_charge_id?: string | null;
+  marked_paid_by?: string | null;
 }
 
 export interface Insight {

@@ -54,8 +54,9 @@ interface StoreState {
 
 interface StoreActions {
   refresh: () => Promise<void>;
-  updateFirm: (patch: Partial<Pick<Firm, 'country' | 'region' | 'currency' | 'locale'>>) => Promise<{ error?: string }>;
+  updateFirm: (patch: Partial<Pick<Firm, 'country' | 'region' | 'currency' | 'locale' | 'lawpay_payment_page_url'>>) => Promise<{ error?: string }>;
   regenerateIntakeToken: () => Promise<{ error?: string }>;
+  markInvoicePaid: (invoiceId: string) => Promise<{ error?: string }>;
   addPracticeArea: (pa: { key: string; label: string }) => Promise<{ error?: string }>;
   updatePracticeArea: (id: string, patch: Partial<Pick<PracticeArea, 'is_active' | 'label'>>) => Promise<{ error?: string }>;
   addParty: (party: Omit<Party, 'id'>) => Promise<Party | null>;
@@ -150,7 +151,7 @@ function loadMockData(): Omit<StoreState, 'loading' | 'error' | 'hasLoadedOnce'>
 
 async function loadAll(firmId: string): Promise<Omit<StoreState, 'loading' | 'error' | 'hasLoadedOnce' | 'integrationConnections'>> {
   const [firmR, attorneysR, practiceAreasR, matterStagesR, partiesR, conflictChecksR, mattersR, deadlinesR, insightsR, documentsR, agentRequestsR, deadlineRulesR, importBatchesR, timeEntriesR, communicationsR, auditLogR, clientInvitesR, clientUsersR, signatureRequestsR, matterPartiesR, partyRelationshipsR, invoicesR] = await Promise.all([
-    supabase.from('firms').select('id,name,country,region,currency,locale,intake_token').eq('id', firmId).single(),
+    supabase.from('firms').select('id,name,country,region,currency,locale,intake_token,lawpay_payment_page_url').eq('id', firmId).single(),
     supabase.from('attorneys').select('*').eq('firm_id', firmId).order('name'),
     supabase.from('practice_areas').select('*').eq('firm_id', firmId),
     supabase.from('matter_stages').select('*').eq('firm_id', firmId).order('sort_order'),
@@ -326,13 +327,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   // Firm-level jurisdiction/locale settings (country/region/currency/locale).
   // Schema-only fields added in migration 0007 — this is the one place that
   // writes them (see the firm settings screen).
-  const updateFirm = useCallback(async (patch: Partial<Pick<Firm, 'country' | 'region' | 'currency' | 'locale'>>) => {
+  const updateFirm = useCallback(async (patch: Partial<Pick<Firm, 'country' | 'region' | 'currency' | 'locale' | 'lawpay_payment_page_url'>>) => {
     if (!isSupabaseConfigured) {
       setState(s => ({ ...s, firm: s.firm ? { ...s.firm, ...patch } : s.firm }));
       showToast('success', 'Saved (preview mode — nothing persists here).');
       return {};
     }
-    const { data, error } = await supabase.from('firms').update(patch).eq('id', firmId).select('id,name,country,region,currency,locale,intake_token').single();
+    const { data, error } = await supabase.from('firms').update(patch).eq('id', firmId).select('id,name,country,region,currency,locale,intake_token,lawpay_payment_page_url').single();
     if (error || !data) { showToast('error', "Couldn't save firm settings."); return { error: error?.message }; }
     setState(s => ({ ...s, firm: data as Firm }));
     showToast('success', 'Firm settings saved.');
@@ -855,7 +856,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const invoice: Invoice = {
         id: `local-invoice-${Date.now()}`, matter_id: matterId, invoice_number: invoiceNumber, issued_date: issuedDate,
         total_minutes: totalMinutes, total_amount: totalAmount, currency, storage_path: `local/${invoiceNumber}.pdf`,
-        created_by: profile?.id ?? null, created_at: new Date().toISOString(),
+        created_by: profile?.id ?? null, created_at: new Date().toISOString(), status: 'unpaid',
       };
       setState(s => ({
         ...s,
@@ -906,6 +907,32 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     showToast('success', `Invoice ${invoiceNumber} generated.`);
     return { invoice };
   }, [firmId, profile, state.matters, state.timeEntries, state.parties, state.firm, state.invoices]);
+
+  // Staff-facing manual fallback for recording a LawPay payment (see
+  // migration 0027 / lawpay-webhook). Exists BECAUSE the webhook's exact
+  // payload shape is unconfirmed until a real LawPay account exists and
+  // fires one for real -- this path depends on nothing from that
+  // integration, only on a person who has confirmed the payment through
+  // LawPay's own dashboard or another channel. marked_paid_by (not
+  // lawpay_charge_id) is what distinguishes this from a webhook-confirmed
+  // payment when looking at an invoice later.
+  const markInvoicePaid = useCallback(async (invoiceId: string) => {
+    const patch = { status: 'paid' as const, paid_at: new Date().toISOString(), marked_paid_by: profile?.id ?? null };
+    if (!isSupabaseConfigured) {
+      setState(s => ({ ...s, invoices: s.invoices.map(i => i.id === invoiceId ? { ...i, ...patch } : i) }));
+      showToast('success', 'Invoice marked paid (preview mode — nothing persists here).');
+      return {};
+    }
+    const { error } = await supabase.from('invoices').update(patch).eq('id', invoiceId);
+    if (error) {
+      console.error('[store] markInvoicePaid failed:', error);
+      showToast('error', "Couldn't mark that invoice paid — try again.");
+      return { error: error.message };
+    }
+    setState(s => ({ ...s, invoices: s.invoices.map(i => i.id === invoiceId ? { ...i, ...patch } : i) }));
+    showToast('success', 'Invoice marked paid.');
+    return {};
+  }, [profile]);
 
   // Calendar + Gmail integration, pass 1 (see migration 0015). One shared
   // status check rather than each screen (Deadlines, matter email compose)
@@ -1109,7 +1136,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   return (
     <StoreContext.Provider value={{
       ...state,
-      refresh, updateFirm, regenerateIntakeToken, addPracticeArea, updatePracticeArea, addParty, runConflictCheck, clearConflictCheck, addMatter, addMatterParty, removeMatterParty, updateMatterStage, updateMatterAttorney, linkMatterConflictCheck, addDeadline, updateDeadline, addInsights, uploadDocument, deleteDocument, requestAgent, removeAgentRequest, commitImportBatch, removeImportBatch, addTimeEntry, updateTimeEntry, deleteTimeEntry, generateInvoice, refreshIntegrations, pushDeadlineToCalendar, sendMatterCommunication, inviteClientToPortal, setDocumentClientVisible, sendForSignature, refreshSignatureStatus, cancelSignatureRequest,
+      refresh, updateFirm, regenerateIntakeToken, markInvoicePaid, addPracticeArea, updatePracticeArea, addParty, runConflictCheck, clearConflictCheck, addMatter, addMatterParty, removeMatterParty, updateMatterStage, updateMatterAttorney, linkMatterConflictCheck, addDeadline, updateDeadline, addInsights, uploadDocument, deleteDocument, requestAgent, removeAgentRequest, commitImportBatch, removeImportBatch, addTimeEntry, updateTimeEntry, deleteTimeEntry, generateInvoice, refreshIntegrations, pushDeadlineToCalendar, sendMatterCommunication, inviteClientToPortal, setDocumentClientVisible, sendForSignature, refreshSignatureStatus, cancelSignatureRequest,
     }}>
       {children}
     </StoreContext.Provider>
