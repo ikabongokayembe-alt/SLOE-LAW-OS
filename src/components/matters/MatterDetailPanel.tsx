@@ -27,7 +27,7 @@ const ROLE_LABEL: Record<MatterPartyRole, string> = {
 export function MatterDetailPanel({ matter, onClose }: { matter: Matter; onClose: () => void }) {
   const {
     matterStages, practiceAreas, attorneys, parties, matters, deadlines, conflictChecks, documents, timeEntries,
-    communications, auditLog, matterParties, addMatterParty, removeMatterParty, deleteDocument, setDocumentClientVisible, firm,
+    communications, auditLog, matterParties, partyRelationships, addMatterParty, removeMatterParty, deleteDocument, setDocumentClientVisible, firm,
   } = useStore();
   const { isDevMode } = useAuth();
   const locale = firm?.locale || 'en-US';
@@ -161,7 +161,7 @@ export function MatterDetailPanel({ matter, onClose }: { matter: Matter; onClose
         <DetailSection title="Conflict check">
           {conflictCheck ? (
             <div className="bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded-lg p-3 space-y-3">
-              <ConflictCheckDetailContent check={conflictCheck} parties={parties} />
+              <ConflictCheckDetailContent check={conflictCheck} parties={parties} matters={matters} matterParties={matterParties} partyRelationships={partyRelationships} />
             </div>
           ) : (
             <div className="flex items-center gap-2 text-sm text-[var(--signal-warning)]">

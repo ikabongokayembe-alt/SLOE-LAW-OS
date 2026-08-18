@@ -5,7 +5,7 @@ import { ConflictCheck } from '../../types';
 import { ConflictCheckDetailPanel } from './ConflictCheckDetail';
 
 export function PartiesScreen() {
-  const { parties, conflictChecks, runConflictCheck } = useStore();
+  const { parties, matters, matterParties, partyRelationships, conflictChecks, runConflictCheck } = useStore();
   const [query, setQuery] = useState('');
   const [checking, setChecking] = useState(false);
   const [lastCheckId, setLastCheckId] = useState<string | null>(null);
@@ -88,7 +88,14 @@ export function PartiesScreen() {
       )}
 
       {openCheck && (
-        <ConflictCheckDetailPanel check={openCheck} parties={parties} onClose={() => setOpenCheckId(null)} />
+        <ConflictCheckDetailPanel
+          check={openCheck}
+          parties={parties}
+          matters={matters}
+          matterParties={matterParties}
+          partyRelationships={partyRelationships}
+          onClose={() => setOpenCheckId(null)}
+        />
       )}
     </div>
   );
