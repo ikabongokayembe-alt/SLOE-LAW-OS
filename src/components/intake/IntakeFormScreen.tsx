@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { supabase } from '../../lib/supabase';
+import { supabase, isSupabaseConfigured } from '../../lib/supabase';
 import { CheckCircle2 } from 'lucide-react';
 
 interface PracticeAreaOption { key: string; label: string; }
@@ -22,6 +22,7 @@ export function IntakeFormScreen() {
   const [firmName, setFirmName] = useState<string | null>(null);
   const [practiceAreas, setPracticeAreas] = useState<PracticeAreaOption[]>([]);
   const [linkError, setLinkError] = useState<string | null>(null);
+  const [linkUnavailable, setLinkUnavailable] = useState(false);
 
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -34,12 +35,19 @@ export function IntakeFormScreen() {
 
   useEffect(() => {
     if (!token) { setResolving(false); setLinkError('This link is missing its token.'); return; }
+    if (!isSupabaseConfigured) {
+      setResolving(false);
+      setLinkUnavailable(true);
+      setLinkError("Something went wrong on our end — please try again shortly.");
+      return;
+    }
     let cancelled = false;
     supabase.rpc('get_intake_firm', { p_token: token }).then(({ data, error }) => {
       if (cancelled) return;
       setResolving(false);
+      if (error) { setLinkUnavailable(true); setLinkError("Something went wrong on our end — please try again shortly."); return; }
       const row = Array.isArray(data) ? data[0] : data;
-      if (error || !row) { setLinkError("This intake link isn't valid — ask the firm for a current one."); return; }
+      if (!row) { setLinkError("This intake link isn't valid — ask the firm for a current one."); return; }
       setFirmName(row.firm_name);
       setPracticeAreas((row.practice_areas ?? []) as PracticeAreaOption[]);
     });
@@ -71,7 +79,7 @@ export function IntakeFormScreen() {
           <p className="text-sm text-[var(--text-tertiary)] text-center">Loading…</p>
         ) : linkError ? (
           <div className="text-center">
-            <h1 className="font-display font-semibold text-xl tracking-tight mb-2">Link not found</h1>
+            <h1 className="font-display font-semibold text-xl tracking-tight mb-2">{linkUnavailable ? 'Temporarily unavailable' : 'Link not found'}</h1>
             <p className="text-sm text-[var(--text-secondary)]">{linkError}</p>
           </div>
         ) : submitted ? (
