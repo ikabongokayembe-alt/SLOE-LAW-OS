@@ -77,7 +77,7 @@ export function SupportModal({ isOpen, onClose }: SupportModalProps) {
               <div className="space-y-1.5">
                 <h4 className="text-base font-semibold text-[var(--text-primary)]">Request Submitted</h4>
                 <p className="text-xs text-[var(--text-secondary)] max-w-sm mx-auto leading-relaxed">
-                  We've received your support message. Our team will review your ticket and respond to your account email address.
+                  We've received your message and will respond soon.
                 </p>
               </div>
               <div className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg p-3 inline-block font-mono text-xs text-[var(--text-tertiary)]">

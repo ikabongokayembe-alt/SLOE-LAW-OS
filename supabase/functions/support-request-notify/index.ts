@@ -11,9 +11,9 @@ const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
 // @ts-ignore Deno global is available in the Supabase Edge Function runtime
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY');
 // @ts-ignore Deno global is available in the Supabase Edge Function runtime
-const RESEND_FROM = Deno.env.get('RESEND_FROM') ?? 'Law OS Support <support@sloelabs.com>';
+const RESEND_FROM = Deno.env.get('RESEND_FROM') ?? 'Law OS Support <law@sloelabs.com>';
 // @ts-ignore Deno global is available in the Supabase Edge Function runtime
-const SUPPORT_EMAIL = Deno.env.get('SUPPORT_EMAIL') ?? 'support@sloelabs.com';
+const SUPPORT_EMAIL = Deno.env.get('SUPPORT_EMAIL') ?? 'reports@sloelabs.com';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
