@@ -402,7 +402,24 @@ Deno.serve(async (req: Request) => {
         }),
       });
       const exec = await execRes.json();
-      if (!exec?.successful) {
+      const isSuccessful = Boolean(exec?.successful);
+
+      const ledger = buildToolCallUsageLedger({
+        provider: 'googlecalendar',
+        tool: 'push_deadline_to_calendar',
+        access: 'write',
+        ok: isSuccessful,
+        errorClass: isSuccessful ? null : 'tool_execution_failed',
+      });
+
+      logUsageEvent({
+        firmId,
+        userId,
+        eventType: 'tool_call',
+        eventData: ledger,
+      });
+
+      if (!isSuccessful) {
         return json({ error: exec?.error || 'Google Calendar rejected the event.' }, 400);
       }
       // Confirmed via a live push (debug_raw) — the actual event resource
@@ -432,7 +449,24 @@ Deno.serve(async (req: Request) => {
         }),
       });
       const exec = await execRes.json();
-      if (!exec?.successful) {
+      const isSuccessful = Boolean(exec?.successful);
+
+      const ledger = buildToolCallUsageLedger({
+        provider: 'gmail',
+        tool: 'send_matter_email',
+        access: 'write',
+        ok: isSuccessful,
+        errorClass: isSuccessful ? null : 'tool_execution_failed',
+      });
+
+      logUsageEvent({
+        firmId,
+        userId,
+        eventType: 'tool_call',
+        eventData: ledger,
+      });
+
+      if (!isSuccessful) {
         return json({ error: exec?.error || 'Gmail rejected the message.' }, 400);
       }
 
