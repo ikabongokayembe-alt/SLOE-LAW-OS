@@ -446,13 +446,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, [firmId, state.parties, state.matters, state.matterParties, state.partyRelationships]);
 
   const clearConflictCheck = useCallback(async (id: string, waived: boolean, notes?: string) => {
-    const patch = { status: waived ? 'waived' as const : 'cleared' as const, cleared_at: new Date().toISOString(), notes };
+    const patch = { status: waived ? 'waived' as const : 'cleared' as const, cleared_at: new Date().toISOString(), cleared_by: profile?.id ?? null, notes };
     setState(s => ({ ...s, conflictChecks: s.conflictChecks.map(c => c.id === id ? { ...c, ...patch } : c) }));
     if (!isSupabaseConfigured) return;
     const { error } = await supabase.from('conflict_checks').update(patch).eq('id', id);
     if (error) { console.error('[store] clearConflictCheck failed:', error); showToast('error', "Couldn't save — try again."); }
     else showToast('success', waived ? 'Conflict waived on record.' : 'Conflict check cleared.');
-  }, []);
+  }, [profile?.id]);
 
   const addMatter = useCallback(async (matter: Omit<Matter, 'id'>) => {
     if (!isSupabaseConfigured) {

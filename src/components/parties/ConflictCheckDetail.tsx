@@ -1,7 +1,9 @@
+import { useState } from 'react';
 import { AlertTriangle, CheckCircle2, Clock, ShieldOff, GitBranch, Link2, Info } from 'lucide-react';
 import { ConflictCheck, Party, Matter, MatterParty, PartyRelationship } from '../../types';
 import { ConflictSignal, analyseConflict } from '../../lib/conflictSignals';
 import { DetailPanel, DetailSection } from '../shared/DetailPanel';
+import { useStore } from '../../lib/store';
 
 const STATUS_STYLE: Record<ConflictCheck['status'], { icon: typeof CheckCircle2; className: string; label: string }> = {
   flagged: { icon: AlertTriangle, className: 'text-[var(--signal-warning)] bg-[var(--signal-warning)]/10 border-[var(--signal-warning)]/30', label: 'Flagged' },
@@ -33,6 +35,67 @@ function FindingsList({ signals }: { signals: ConflictSignal[] }) {
         </div>
       ))}
     </div>
+  );
+}
+
+// The gate-clearing action for a flagged check. Deliberately not a single
+// click: this is what unlocks a matter past enforce_conflict_check_gate(),
+// so both paths require typed reasoning and an explicit confirm(), and
+// neither button is a system verdict -- "Clear" records the human's read
+// that there's no real conflict here (e.g. a benign self-match), "Waive"
+// records that a real conflict exists and the firm is proceeding anyway.
+// Two distinct statuses (not one collapsed meaning) because they read
+// differently to a principal auditing the trail later: cleared says
+// "nothing here", waived says "something here, deliberate call made".
+function ReviewFlaggedCheck({ check }: { check: ConflictCheck }) {
+  const { clearConflictCheck } = useStore();
+  const [notes, setNotes] = useState('');
+  const [submitting, setSubmitting] = useState<'clear' | 'waive' | null>(null);
+
+  const act = async (waive: boolean) => {
+    const trimmed = notes.trim();
+    if (!trimmed) return;
+    const confirmed = confirm(
+      waive
+        ? "Waive this conflict and let the matter proceed? This records that a real conflict exists and the firm is choosing to proceed anyway -- it does not remove the finding."
+        : "Clear this flag and let the matter proceed? This records your professional judgment that there's no real conflict here -- the system isn't determining that for you."
+    );
+    if (!confirmed) return;
+    setSubmitting(waive ? 'waive' : 'clear');
+    await clearConflictCheck(check.id, waive, trimmed);
+    setSubmitting(null);
+  };
+
+  return (
+    <DetailSection title="Review this flag">
+      <p className="text-[11px] text-[var(--text-tertiary)] mb-2">
+        This is your call to make, not the system's -- clearing or waiving records your professional judgment on the connection found above. Required before this matter can leave Intake.
+      </p>
+      <label className="text-[10px] uppercase font-mono tracking-wider text-[var(--text-tertiary)] block mb-1">Reasoning (required)</label>
+      <textarea
+        value={notes}
+        onChange={e => setNotes(e.target.value)}
+        placeholder="Why this isn't a real conflict, or how it's being managed…"
+        rows={2}
+        className="w-full px-3 py-2 bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded text-sm focus:outline-none resize-none mb-2"
+      />
+      <div className="flex gap-2">
+        <button
+          onClick={() => act(false)}
+          disabled={!notes.trim() || submitting !== null}
+          className="flex-1 h-9 text-sm font-medium bg-[var(--signal-positive)]/10 text-[var(--signal-positive)] border border-[var(--signal-positive)]/30 rounded hover:opacity-90 transition-opacity disabled:opacity-40"
+        >
+          {submitting === 'clear' ? 'Clearing…' : 'Clear — no real conflict'}
+        </button>
+        <button
+          onClick={() => act(true)}
+          disabled={!notes.trim() || submitting !== null}
+          className="flex-1 h-9 text-sm font-medium bg-[var(--bg-tertiary)] text-[var(--text-primary)] border border-[var(--border-subtle)] rounded hover:opacity-90 transition-opacity disabled:opacity-40"
+        >
+          {submitting === 'waive' ? 'Waiving…' : 'Waive — proceed anyway'}
+        </button>
+      </div>
+    </DetailSection>
   );
 }
 
@@ -121,6 +184,8 @@ export function ConflictCheckDetailContent({
           </div>
         </DetailSection>
       ) : null}
+
+      {check.status === 'flagged' && <ReviewFlaggedCheck check={check} />}
 
       {(check.status === 'cleared' || check.status === 'waived') && (check.cleared_at || check.notes) && (
         <DetailSection title={check.status === 'waived' ? 'Waiver' : 'Cleared'}>

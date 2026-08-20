@@ -86,7 +86,7 @@ export interface ConflictCheck {
   searched_name: string;
   matched_party_ids: string[];
   status: ConflictCheckStatus;
-  cleared_by?: string;
+  cleared_by?: string | null;
   cleared_at?: string;
   notes?: string;
   created_at: string;
