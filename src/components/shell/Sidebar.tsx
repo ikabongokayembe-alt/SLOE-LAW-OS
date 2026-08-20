@@ -1,11 +1,12 @@
 import { NavLink, useNavigate, useLocation } from 'react-router-dom';
-import { Home, Briefcase, Clock, Users, ChevronDown, ChevronRight, UsersRound, LogOut, Wrench, Sparkles, Plug, Search, FileText, Settings, Timer, Mail, History } from 'lucide-react';
+import { Home, Briefcase, Clock, Users, ChevronDown, ChevronRight, UsersRound, LogOut, Wrench, Sparkles, Plug, Search, FileText, Settings, Timer, Mail, History, LifeBuoy } from 'lucide-react';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { useState } from 'react';
 import { useAuth } from '../../lib/auth';
 import { useStore } from '../../lib/store';
 import { getSpecialist } from '../../data/specialists';
+import { SupportModal } from '../support/SupportModal';
 
 const cn = (...inputs: (string | undefined | null | false)[]) => twMerge(clsx(inputs));
 
@@ -23,6 +24,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
   const location = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
   const [operationsOpen, setOperationsOpen] = useState(true);
+  const [supportOpen, setSupportOpen] = useState(false);
 
   const navItemClass = ({ isActive }: { isActive: boolean }) => cn(
     "flex items-center space-x-2.5 h-8 px-2.5 mx-2 rounded-md text-[13px] transition-colors duration-150 ease-out",
@@ -116,6 +118,16 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
         )}
       </nav>
 
+      <div className="px-2 py-2 border-t border-[var(--border-subtle)] space-y-1">
+        <button
+          onClick={() => setSupportOpen(true)}
+          className="w-full flex items-center space-x-2.5 h-8 px-2.5 rounded-md text-[13px] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
+        >
+          <LifeBuoy className={iconClass} />
+          <span>Contact Support</span>
+        </button>
+      </div>
+
       <div className="relative p-3 border-t border-[var(--border-subtle)]">
         <button onClick={() => setMenuOpen(v => !v)} className="w-full flex items-center space-x-2.5 hover:bg-[var(--bg-tertiary)] rounded-md p-1 -m-1 transition-colors">
           <img src={`https://ui-avatars.com/api/?name=${encodeURIComponent(profile?.name ?? 'Guest')}&background=random`} className="w-7 h-7 rounded-full" alt={profile?.name ?? 'Guest'} />
@@ -136,6 +148,8 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
           </div>
         )}
       </div>
+
+      <SupportModal isOpen={supportOpen} onClose={() => setSupportOpen(false)} />
     </div>
   );
 }
