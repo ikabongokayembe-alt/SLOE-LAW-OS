@@ -65,9 +65,11 @@ export interface Party {
   name: string;
   party_type: 'individual' | 'organization';
   aliases: string[];
+  phone?: string | null;
   notes?: string;
   import_batch_id?: string | null;
 }
+
 
 // A party's role on a matter beyond the primary client (migration 0002).
 // This is what makes "your prospective client is the opposing party on

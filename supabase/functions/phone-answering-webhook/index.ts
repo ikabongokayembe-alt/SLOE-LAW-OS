@@ -101,11 +101,6 @@ Deno.serve(async (req: Request) => {
       firm = firms.find(f => normalizePhone(f.phone_answering_number) === normCalledPhone) ?? null;
     }
 
-    // Fallback: if only one firm exists (single tenant deployment), fallback gracefully
-    if (!firm && firms.length === 1) {
-      firm = firms[0];
-    }
-
     if (!firm) {
       console.warn('[phone-answering-webhook] No firm matched called phone number:', calledPhone);
       return json({ error: `No firm matched called phone number ${calledPhone}` }, 404);
@@ -117,9 +112,11 @@ Deno.serve(async (req: Request) => {
 
     if (normCallerPhone.length >= 7) {
       // 1. Check if caller matches an existing party with an active matter
-      const partiesRes = await fetch(`${SUPABASE_URL}/rest/v1/parties?firm_id=eq.${firm.id}&select=id,name,notes`, { headers: restHeaders });
+      // Uses structured parties.phone (migration 0029) as primary match, with notes string matching as secondary fallback
+      const partiesRes = await fetch(`${SUPABASE_URL}/rest/v1/parties?firm_id=eq.${firm.id}&select=id,name,phone,notes`, { headers: restHeaders });
       const parties: any[] = (await partiesRes.json()) ?? [];
-      const matchedParty = parties.find(p => normalizePhone(p.notes).includes(normCallerPhone) || normalizePhone(p.name).includes(normCallerPhone));
+      const matchedParty = parties.find(p => (p.phone && normalizePhone(p.phone) === normCallerPhone) || normalizePhone(p.notes).includes(normCallerPhone));
+
 
       if (matchedParty) {
         // Find active matter for party
