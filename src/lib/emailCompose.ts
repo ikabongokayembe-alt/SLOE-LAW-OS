@@ -83,7 +83,7 @@ export function resolveRecipientEmail(
 
 async function classifyIsEmailRequest(message: string): Promise<boolean> {
   try {
-    const out = await callGemini(emailIntentClassifyPrompt(message), false);
+    const out = await callGemini(emailIntentClassifyPrompt(message), false, 'email_draft_classify');
     return /^\s*yes\b/i.test(String(out));
   } catch {
     return false; // a classification failure must fall through to normal chat, never block it
@@ -103,7 +103,7 @@ export async function tryComposeEmail(message: string, ctx: EmailComposeContext)
 
   let raw: any;
   try {
-    raw = await callGemini(emailComposePrompt(message, matterCandidates, partyCandidates), true);
+    raw = await callGemini(emailComposePrompt(message, matterCandidates, partyCandidates), true, 'email_draft');
   } catch {
     return null;
   }

@@ -35,6 +35,8 @@
 
 import { reportError } from '../_shared/sentry.ts';
 import { classifyTool, buildOfferedTools } from '../_shared/composioTools.ts';
+import { buildToolCallUsageLedger } from '../_shared/cost.ts';
+import { logUsageEvent } from '../_shared/usageLogger.ts';
 
 // @ts-ignore Deno global is available in the Supabase Edge Function runtime
 const COMPOSIO_API_KEY = Deno.env.get('COMPOSIO_API_KEY');
@@ -323,7 +325,24 @@ Deno.serve(async (req: Request) => {
         }),
       });
       const exec = await execRes.json();
-      if (!exec?.successful) {
+      const isSuccessful = Boolean(exec?.successful);
+
+      const ledger = buildToolCallUsageLedger({
+        provider: owner.slug,
+        tool: tool_slug,
+        access: 'read',
+        ok: isSuccessful,
+        errorClass: isSuccessful ? null : 'tool_execution_failed',
+      });
+
+      logUsageEvent({
+        firmId,
+        userId,
+        eventType: 'tool_call',
+        eventData: ledger,
+      });
+
+      if (!isSuccessful) {
         return json({ error: exec?.error || 'The tool call did not succeed.' }, 400);
       }
       return json({ ok: true, data: exec?.data ?? null });

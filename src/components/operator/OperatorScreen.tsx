@@ -69,7 +69,7 @@ export function OperatorScreen() {
         matters, deadlines, parties, conflictChecks,
         firm_jurisdiction: { country: firm?.country ?? null, region: firm?.region ?? null },
       }, CHAT_CONTEXT_BUDGET);
-      return streamGeminiContent(operatorChatPrompt(text, history, built.text), onChunk);
+      return streamGeminiContent(operatorChatPrompt(text, history, built.text), onChunk, 'operator_chat');
     });
   };
 

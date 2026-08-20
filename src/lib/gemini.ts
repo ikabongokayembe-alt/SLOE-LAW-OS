@@ -2,6 +2,8 @@
 // `ai-call` which holds the OpenAI key server-side. No LLM keys live in
 // the frontend.
 
+import { supabase } from './supabase';
+
 const SUPA_URL = import.meta.env.VITE_SUPABASE_URL as string;
 const ANON = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
 const AI_ENDPOINT = `${SUPA_URL}/functions/v1/ai-call`;
@@ -12,27 +14,36 @@ async function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function callEdge(body: { prompt: string; expectJson?: boolean; stream?: boolean }) {
+async function getAuthHeader(): Promise<string> {
+  try {
+    const { data } = await supabase.auth.getSession();
+    const token = data?.session?.access_token;
+    if (token) return `Bearer ${token}`;
+  } catch {
+    // ignore
+  }
+  return `Bearer ${ANON}`;
+}
+
+async function callEdge(body: { prompt: string; expectJson?: boolean; stream?: boolean; feature?: string }) {
+  const authHeader = await getAuthHeader();
   return fetch(AI_ENDPOINT, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${ANON}`,
+      Authorization: authHeader,
       apikey: ANON,
     },
     body: JSON.stringify(body),
   });
 }
 
-// Note: OpenAI JSON mode requires the word "json" somewhere in the prompt.
-// Prompts we send already ask for JSON shapes explicitly, so this usually works.
-// If a prompt fails, wrap it or append "Respond with JSON." when expectJson=true.
 function ensureJsonHint(prompt: string) {
   return prompt.toLowerCase().includes('json') ? prompt : `${prompt}\n\nRespond with JSON.`;
 }
 
-export async function callGemini(prompt: string, expectJson: boolean = true): Promise<any> {
-  const key = prompt.slice(0, 200) + String(expectJson);
+export async function callGemini(prompt: string, expectJson: boolean = true, feature: string = 'generic'): Promise<any> {
+  const key = prompt.slice(0, 200) + String(expectJson) + feature;
   if (cache.has(key)) {
     const cached = cache.get(key)!;
     return expectJson ? JSON.parse(cached) : cached;
@@ -44,7 +55,7 @@ export async function callGemini(prompt: string, expectJson: boolean = true): Pr
 
   for (let i = 0; i <= retries.length; i++) {
     try {
-      const res = await callEdge({ prompt: actualPrompt, expectJson });
+      const res = await callEdge({ prompt: actualPrompt, expectJson, feature });
       if (!res.ok) throw new Error(`ai-call ${res.status}`);
       const { text } = await res.json();
       if (!text) throw new Error('Empty response');
@@ -70,8 +81,8 @@ export async function callGemini(prompt: string, expectJson: boolean = true): Pr
   throw lastError;
 }
 
-export async function streamGeminiContent(prompt: string, onChunk: (text: string) => void): Promise<string> {
-  const res = await callEdge({ prompt, stream: true });
+export async function streamGeminiContent(prompt: string, onChunk: (text: string) => void, feature: string = 'generic'): Promise<string> {
+  const res = await callEdge({ prompt, stream: true, feature });
   if (!res.ok || !res.body) throw new Error(`ai-call stream ${res.status}`);
 
   const reader = res.body.getReader();
@@ -84,7 +95,6 @@ export async function streamGeminiContent(prompt: string, onChunk: (text: string
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
 
-    // SSE lines: "data: {...}\n\n" or "data: [DONE]"
     const lines = buffer.split('\n');
     buffer = lines.pop() ?? '';
 

@@ -82,7 +82,7 @@ export function StrategicScreen() {
         firm_jurisdiction: { country: firm?.country ?? null, region: firm?.region ?? null },
       }, CHAT_CONTEXT_BUDGET);
       setLastContextUsage(built);
-      return streamGeminiContent(strategicChatPrompt(textToSend, history, built.text), onChunk);
+      return streamGeminiContent(strategicChatPrompt(textToSend, history, built.text), onChunk, 'analyst_chat');
     });
   };
 
@@ -91,7 +91,7 @@ export function StrategicScreen() {
     try {
       const built = buildFirmContext({ matters, deadlines, parties, conflictChecks }, INSIGHTS_CONTEXT_BUDGET);
       setLastContextUsage(built);
-      const res = await callGemini(strategicInsightsPrompt(built.text));
+      const res = await callGemini(strategicInsightsPrompt(built.text), true, 'analyst_context');
       const arr = Array.isArray(res) ? res : (res?.insights ?? []);
       if (arr.length) {
         await addInsights(arr.map((i: any) => ({

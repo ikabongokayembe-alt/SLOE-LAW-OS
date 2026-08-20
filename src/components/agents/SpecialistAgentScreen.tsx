@@ -94,7 +94,8 @@ export function SpecialistAgentScreen() {
       const built = buildFirmContext(context, CHAT_CONTEXT_BUDGET);
       const full = await streamGeminiContent(
         specialistChatPrompt(specialist.key, text, chatHistory, built.text),
-        chunk => setStreamingContent(chunk)
+        chunk => setStreamingContent(chunk),
+        'specialist_agent'
       );
       setChatHistory(prev => [...prev, { role: 'assistant', content: full }]);
     } catch {
