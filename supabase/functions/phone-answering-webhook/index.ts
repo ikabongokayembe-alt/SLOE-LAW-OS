@@ -65,8 +65,12 @@ Deno.serve(async (req: Request) => {
     // ElevenLabs post-call payload structure vs generic Twilio payload fallback
     const dataObj = rawBody?.data ?? rawBody;
     
+    const calledPhone = String(firstDefined(dataObj, [
+      'called_phone', 'to', 'phone_answering_number', 'metadata.called_phone', 'metadata.to', 'metadata.phone_number'
+    ]) ?? '');
+
     const callerPhone = String(firstDefined(dataObj, [
-      'caller_phone', 'caller_id', 'from', 'user_phone_number', 'metadata.phone_number', 'metadata.caller_phone'
+      'caller_phone', 'caller_id', 'from', 'user_phone_number', 'metadata.caller_phone', 'metadata.from'
     ]) ?? '');
 
     const callerName = String(firstDefined(dataObj, [
@@ -86,12 +90,25 @@ Deno.serve(async (req: Request) => {
       ? transcript.map((t: any) => `${t.speaker || t.role || 'user'}: ${t.message || t.text}`).join('\n')
       : String(transcript);
 
-    // Fetch primary firm (or firm matching caller/intake)
-    const firmRes = await fetch(`${SUPABASE_URL}/rest/v1/firms?select=id,intake_token&limit=1`, { headers: restHeaders });
-    const firmData = await firmRes.json();
-    const firm = firmData?.[0];
+    // Look up firm matching the recipient Twilio number (firms.phone_answering_number)
+    const normCalledPhone = normalizePhone(calledPhone);
+    let firm: { id: string; intake_token: string | null } | null = null;
+
+    const firmsRes = await fetch(`${SUPABASE_URL}/rest/v1/firms?select=id,intake_token,phone_answering_number`, { headers: restHeaders });
+    const firms: any[] = (await firmsRes.json()) ?? [];
+
+    if (normCalledPhone.length >= 7) {
+      firm = firms.find(f => normalizePhone(f.phone_answering_number) === normCalledPhone) ?? null;
+    }
+
+    // Fallback: if only one firm exists (single tenant deployment), fallback gracefully
+    if (!firm && firms.length === 1) {
+      firm = firms[0];
+    }
+
     if (!firm) {
-      return json({ error: 'No firm found' }, 500);
+      console.warn('[phone-answering-webhook] No firm matched called phone number:', calledPhone);
+      return json({ error: `No firm matched called phone number ${calledPhone}` }, 404);
     }
 
     const normCallerPhone = normalizePhone(callerPhone);
@@ -99,7 +116,7 @@ Deno.serve(async (req: Request) => {
     let outcomeAction: 'intake_created' | 'matter_noted' | 'callback_flagged' = 'callback_flagged';
 
     if (normCallerPhone.length >= 7) {
-      // 1. Check if caller matches an existing party with a active matter
+      // 1. Check if caller matches an existing party with an active matter
       const partiesRes = await fetch(`${SUPABASE_URL}/rest/v1/parties?firm_id=eq.${firm.id}&select=id,name,notes`, { headers: restHeaders });
       const parties: any[] = (await partiesRes.json()) ?? [];
       const matchedParty = parties.find(p => normalizePhone(p.notes).includes(normCallerPhone) || normalizePhone(p.name).includes(normCallerPhone));
@@ -129,10 +146,15 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    // 2. If no existing client matter was matched, check if prospective intake form can be created
+    // 2. Prospective Client Intake Heuristic:
+    // Requires an EXPLICIT positive intent keyword in summary or analysis.
+    // Does NOT trigger auto-intake creation merely on callerName presence to prevent spurious records.
     if (!matchedMatterId && firm.intake_token) {
-      const isExplicitIntake = summary.toLowerCase().includes('intake') || summary.toLowerCase().includes('inquiry') || summary.toLowerCase().includes('consultation') || summary.toLowerCase().includes('new client');
-      if (isExplicitIntake || callerName) {
+      const summaryLower = summary.toLowerCase();
+      const explicitIntakeKeywords = ['intake', 'inquiry', 'new client', 'consultation', 'retainer', 'hire attorney', 'legal representation', 'case inquiry'];
+      const hasExplicitIntakeIntent = explicitIntakeKeywords.some(kw => summaryLower.includes(kw));
+
+      if (hasExplicitIntakeIntent) {
         // Trigger public submit_intake RPC
         const intakeRes = await fetch(`${SUPABASE_URL}/rest/v1/rpc/submit_intake`, {
           method: 'POST',
@@ -152,6 +174,7 @@ Deno.serve(async (req: Request) => {
         }
       }
     }
+
 
     // 3. Log call record into `phone_call_logs`
     await fetch(`${SUPABASE_URL}/rest/v1/phone_call_logs`, {
