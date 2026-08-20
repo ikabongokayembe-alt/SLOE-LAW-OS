@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useStore } from '../../lib/store';
+import { useAuth } from '../../lib/auth';
 import { useToast } from '../../lib/toast';
-import { Settings, Plus, FileUp, ChevronRight, Copy, RotateCw, UserPlus, CreditCard, CheckCircle2, AlertCircle, ExternalLink, ShieldCheck, Phone } from 'lucide-react';
+import { Settings, Plus, FileUp, ChevronRight, Copy, RotateCw, UserPlus, CreditCard, CheckCircle2, AlertCircle, ExternalLink, ShieldCheck, Phone, Zap, Check, Sparkles } from 'lucide-react';
 
 import { isLawPayConnected, maskLawPayUrl } from '../../lib/lawpay';
+import { fetchPricingPlans, fetchFirmBillingStatus, createCheckoutSession, createPortalSession, PricingPlan, FirmBillingRecord } from '../../lib/billing';
 
 
 function slugify(label: string): string {
@@ -34,6 +36,13 @@ export function SettingsScreen() {
   const [addingPa, setAddingPa] = useState(false);
   const [toggleBusyId, setToggleBusyId] = useState<string | null>(null);
 
+  const { profile } = useAuth();
+  const [billingRecord, setBillingRecord] = useState<FirmBillingRecord | null>(null);
+  const [plans, setPlans] = useState<PricingPlan[]>([]);
+  const [loadingBilling, setLoadingBilling] = useState(true);
+  const [checkoutBusyPlan, setCheckoutBusyPlan] = useState<string | null>(null);
+  const [portalBusy, setPortalBusy] = useState(false);
+
   useEffect(() => {
     setCountry(firm?.country ?? '');
     setRegion(firm?.region ?? '');
@@ -41,7 +50,50 @@ export function SettingsScreen() {
     setLocale(firm?.locale ?? '');
     setLawpayUrl(firm?.lawpay_payment_page_url ?? '');
     setPhoneAnsweringNumber(firm?.phone_answering_number ?? '');
+
+    async function loadBilling() {
+      if (!firm?.id) return;
+      setLoadingBilling(true);
+      const [bRec, pList] = await Promise.all([
+        fetchFirmBillingStatus(firm.id),
+        fetchPricingPlans(),
+      ]);
+      setBillingRecord(bRec);
+      setPlans(pList);
+      setLoadingBilling(false);
+    }
+    loadBilling();
   }, [firm]);
+
+  const handleCheckout = async (planKey: 'starter' | 'pro' | 'business') => {
+    if (profile?.role !== 'principal' && profile?.role !== 'manager') {
+      showToast('error', 'Only firm partners or practice managers can change the firm subscription.');
+      return;
+    }
+    setCheckoutBusyPlan(planKey);
+    try {
+      const checkoutUrl = await createCheckoutSession(planKey);
+      window.location.href = checkoutUrl;
+    } catch (err: any) {
+      showToast('error', err.message || 'Could not start checkout session.');
+      setCheckoutBusyPlan(null);
+    }
+  };
+
+  const handleManageBilling = async () => {
+    if (profile?.role !== 'principal' && profile?.role !== 'manager') {
+      showToast('error', 'Only firm partners or practice managers can access the billing portal.');
+      return;
+    }
+    setPortalBusy(true);
+    try {
+      const portalUrl = await createPortalSession();
+      window.location.href = portalUrl;
+    } catch (err: any) {
+      showToast('error', err.message || 'Could not open billing portal.');
+      setPortalBusy(false);
+    }
+  };
 
 
   const dirty = firm && (
@@ -480,6 +532,122 @@ export function SettingsScreen() {
       </div>
 
 
+
+      <div className="mt-8 pt-8 border-t border-[var(--border-subtle)]">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h3 className="text-sm font-medium text-[var(--text-primary)] flex items-center gap-2">
+              <CreditCard className="w-4 h-4 text-[var(--accent-secondary)]" /> Subscription &amp; Billing
+            </h3>
+            <p className="text-xs text-[var(--text-secondary)] mt-0.5">
+              Law OS firm subscription plan, billing portal management, and self-serve upgrades.
+            </p>
+          </div>
+          {billingRecord?.stripe_customer_id && (
+            <button
+              onClick={handleManageBilling}
+              disabled={portalBusy}
+              className="flex items-center gap-1.5 h-8 px-3 text-xs bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] hover:border-[var(--border-strong)] rounded font-medium text-[var(--text-primary)] transition-colors disabled:opacity-40"
+            >
+              {portalBusy ? 'Opening Portal…' : 'Manage Subscription'} <ExternalLink className="w-3 h-3 text-[var(--text-tertiary)]" />
+            </button>
+          )}
+        </div>
+
+        <div className="border border-[var(--border-subtle)] bg-[var(--bg-secondary)] rounded-lg p-5 space-y-6">
+          <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-[var(--border-subtle)]">
+            <div className="space-y-1">
+              <div className="text-xs text-[var(--text-tertiary)] font-medium uppercase tracking-wider">Current Firm Plan</div>
+              <div className="flex items-center gap-2">
+                <span className="text-base font-semibold text-[var(--text-primary)] capitalize">
+                  {billingRecord?.plan || 'Free Trial'} Plan
+                </span>
+                <span className={`text-xs px-2.5 py-0.5 rounded-full font-medium border ${
+                  billingRecord?.billing_status === 'active'
+                    ? 'bg-[var(--signal-positive)]/10 text-[var(--signal-positive)] border-[var(--signal-positive)]/30'
+                    : billingRecord?.billing_status === 'past_due'
+                    ? 'bg-[var(--signal-warning)]/10 text-[var(--signal-warning)] border-[var(--signal-warning)]/30'
+                    : 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)] border-[var(--border-subtle)]'
+                }`}>
+                  {billingRecord?.billing_status ? billingRecord.billing_status.toUpperCase() : 'TRIALING'}
+                </span>
+              </div>
+            </div>
+            {profile?.role !== 'principal' && profile?.role !== 'manager' && (
+              <span className="text-xs text-[var(--text-tertiary)] italic">
+                Only firm partners or practice managers can modify billing.
+              </span>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {plans.map((p) => {
+              const isCurrent = (billingRecord?.plan || 'trial') === p.planKey;
+              const isBusy = checkoutBusyPlan === p.planKey;
+              return (
+                <div
+                  key={p.id}
+                  className={`border rounded-lg p-4 flex flex-col justify-between transition-colors ${
+                    isCurrent
+                      ? 'border-[var(--text-primary)] bg-[var(--bg-primary)] shadow-sm'
+                      : 'border-[var(--border-subtle)] bg-[var(--bg-tertiary)]/50 hover:border-[var(--border-default)]'
+                  }`}
+                >
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-sm font-semibold text-[var(--text-primary)]">{p.name}</h4>
+                      {isCurrent && (
+                        <span className="text-[10px] font-medium bg-[var(--text-primary)] text-[var(--bg-primary)] px-2 py-0.5 rounded-full">
+                          Active
+                        </span>
+                      )}
+                    </div>
+                    <div>
+                      <span className="text-2xl font-bold text-[var(--text-primary)]">
+                        ${(p.monthlyCents / 100).toFixed(0)}
+                      </span>
+                      <span className="text-xs text-[var(--text-tertiary)]"> / month</span>
+                    </div>
+                    <ul className="space-y-2 pt-2 border-t border-[var(--border-subtle)] text-xs text-[var(--text-secondary)]">
+                      {p.features.map((feat, idx) => (
+                        <li key={idx} className="flex items-start gap-1.5">
+                          <Check className="w-3.5 h-3.5 text-[var(--signal-positive)] shrink-0 mt-0.5" />
+                          <span>{feat}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  <div className="pt-4 mt-4">
+                    {isCurrent ? (
+                      <button
+                        disabled
+                        className="w-full h-8 bg-[var(--bg-tertiary)] text-[var(--text-tertiary)] border border-[var(--border-subtle)] rounded text-xs font-medium cursor-default"
+                      >
+                        Current Plan
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => handleCheckout(p.planKey)}
+                        disabled={isBusy || (profile?.role !== 'principal' && profile?.role !== 'manager')}
+                        className="w-full h-8 bg-[var(--text-primary)] text-[var(--bg-primary)] hover:opacity-90 transition-opacity rounded text-xs font-medium disabled:opacity-40 flex items-center justify-center gap-1"
+                      >
+                        {isBusy ? (
+                          'Redirecting…'
+                        ) : (
+                          <>
+                            <Zap className="w-3.5 h-3.5" /> Select {p.name}
+                          </>
+                        )}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
 
       <div className="mt-8">
         <h3 className="text-sm font-medium mb-1">Data Import</h3>
