@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useStore } from '../../lib/store';
 import { useToast } from '../../lib/toast';
-import { Settings, Plus, FileUp, ChevronRight, Copy, RotateCw, UserPlus, CreditCard, CheckCircle2, AlertCircle, ExternalLink, ShieldCheck } from 'lucide-react';
+import { Settings, Plus, FileUp, ChevronRight, Copy, RotateCw, UserPlus, CreditCard, CheckCircle2, AlertCircle, ExternalLink, ShieldCheck, Phone } from 'lucide-react';
+
 import { isLawPayConnected, maskLawPayUrl } from '../../lib/lawpay';
 
 
@@ -20,6 +21,8 @@ export function SettingsScreen() {
   const [regeneratingIntake, setRegeneratingIntake] = useState(false);
   const [lawpayUrl, setLawpayUrl] = useState('');
   const [savingLawpay, setSavingLawpay] = useState(false);
+  const [phoneAnsweringNumber, setPhoneAnsweringNumber] = useState('');
+  const [savingPhoneAnswering, setSavingPhoneAnswering] = useState(false);
   const [country, setCountry] = useState('');
   const [region, setRegion] = useState('');
   const [currency, setCurrency] = useState('');
@@ -37,7 +40,9 @@ export function SettingsScreen() {
     setCurrency(firm?.currency ?? '');
     setLocale(firm?.locale ?? '');
     setLawpayUrl(firm?.lawpay_payment_page_url ?? '');
+    setPhoneAnsweringNumber(firm?.phone_answering_number ?? '');
   }, [firm]);
+
 
   const dirty = firm && (
     country !== (firm.country ?? '') ||
@@ -73,6 +78,16 @@ export function SettingsScreen() {
     await updateFirm({ lawpay_payment_page_url: lawpayUrl.trim() || null });
     setSavingLawpay(false);
   };
+
+  const phoneAnsweringDirty = firm && phoneAnsweringNumber !== (firm.phone_answering_number ?? '');
+  const isPhoneAnsweringConnected = firm && !!(firm.phone_answering_number && firm.phone_answering_number.trim().length > 0);
+  const handleSavePhoneAnswering = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingPhoneAnswering(true);
+    await updateFirm({ phone_answering_number: phoneAnsweringNumber.trim() || null });
+    setSavingPhoneAnswering(false);
+  };
+
 
   const intakeLink = firm?.intake_token ? `${window.location.origin}/intake?token=${firm.intake_token}` : '';
 
@@ -377,6 +392,93 @@ export function SettingsScreen() {
           </form>
         </div>
       </div>
+
+      <div className="mt-8">
+        <div className="flex items-center justify-between mb-2">
+          <div>
+            <h3 className="text-sm font-medium flex items-center gap-2">
+              <Phone className="w-4 h-4 text-[var(--accent-secondary)]" /> Phone Answering (ElevenLabs &amp; Twilio)
+            </h3>
+            <p className="text-xs text-[var(--text-secondary)] mt-0.5">
+              Connect your firm's voice-enabled Twilio phone number to deploy an automated AI answering agent powered by ElevenLabs Conversational AI.
+            </p>
+          </div>
+          {isPhoneAnsweringConnected ? (
+            <span className="flex items-center gap-1.5 text-xs font-medium text-[var(--signal-positive)] bg-[var(--signal-positive)]/10 border border-[var(--signal-positive)]/30 rounded-full px-2.5 py-1">
+              <CheckCircle2 className="w-3.5 h-3.5" /> Voice Agent Active
+            </span>
+          ) : (
+            <span className="flex items-center gap-1.5 text-xs font-medium text-[var(--signal-warning)] bg-[var(--signal-warning)]/10 border border-[var(--signal-warning)]/30 rounded-full px-2.5 py-1">
+              <AlertCircle className="w-3.5 h-3.5" /> Not Connected
+            </span>
+          )}
+        </div>
+
+        <div className="border border-[var(--border-subtle)] bg-[var(--bg-secondary)] rounded-lg p-4 space-y-4">
+          {isPhoneAnsweringConnected ? (
+            <div className="bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded-md p-3 text-xs space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="font-medium text-[var(--text-primary)] flex items-center gap-1.5">
+                  <ShieldCheck className="w-4 h-4 text-[var(--signal-positive)]" /> Active Twilio Voice Number
+                </span>
+                <span className="font-mono text-[var(--text-primary)] font-semibold">{firm?.phone_answering_number}</span>
+              </div>
+              <div className="text-[var(--text-tertiary)] space-y-1">
+                <p>Post-call transcripts and triage results are automatically ingested via your post-call webhook endpoint:</p>
+                <div className="font-mono text-[11px] text-[var(--text-secondary)] bg-[var(--bg-primary)] px-2.5 py-1.5 rounded border border-[var(--border-subtle)] truncate">
+                  {`${window.location.origin.replace(/\.workers\.dev|\.co/, '')}/functions/v1/phone-answering-webhook`}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="bg-[var(--signal-warning)]/5 border border-[var(--signal-warning)]/20 rounded-md p-3 text-xs text-[var(--text-secondary)] space-y-1">
+              <p className="font-medium text-[var(--text-primary)]">What connecting AI Phone Answering unlocks:</p>
+              <ul className="list-disc list-inside space-y-0.5 text-[var(--text-secondary)] pl-1">
+                <li>Automated 24/7 client intake collection for prospective caller inquiries</li>
+                <li>Automatic matter note &amp; transcript creation for caller updates on active matters</li>
+                <li>Flagged high-priority callback alerts for human staff follow-up</li>
+              </ul>
+            </div>
+          )}
+
+          <form onSubmit={handleSavePhoneAnswering} className="space-y-3 pt-1">
+            <div>
+              <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">
+                {isPhoneAnsweringConnected ? 'Update Voice Phone Number' : 'Twilio Voice Phone Number'}
+              </label>
+              <input
+                type="tel"
+                value={phoneAnsweringNumber}
+                onChange={e => setPhoneAnsweringNumber(e.target.value)}
+                placeholder="+1 (555) 234-5678"
+                className="w-full h-9 px-3 bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded text-sm focus:outline-none focus:border-[var(--border-strong)]"
+              />
+              <span className="text-[11px] text-[var(--text-tertiary)] mt-1 block">
+                Purchased in your Twilio console and imported into your ElevenLabs Conversational AI Agent settings.
+              </span>
+            </div>
+            <div className="flex items-center gap-3">
+              <button
+                type="submit"
+                disabled={savingPhoneAnswering || !phoneAnsweringDirty}
+                className="h-8 px-4 bg-[var(--text-primary)] text-[var(--bg-primary)] rounded text-xs font-medium hover:opacity-90 transition-opacity disabled:opacity-40"
+              >
+                {savingPhoneAnswering ? 'Saving…' : 'Save Connection'}
+              </button>
+              {phoneAnsweringDirty && (
+                <button
+                  type="button"
+                  onClick={() => setPhoneAnsweringNumber(firm?.phone_answering_number ?? '')}
+                  className="text-xs text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+                >
+                  Cancel
+                </button>
+              )}
+            </div>
+          </form>
+        </div>
+      </div>
+
 
 
       <div className="mt-8">

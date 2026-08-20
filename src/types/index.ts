@@ -25,7 +25,23 @@ export interface Firm {
   // it's the literal public link a client is meant to click. Null until
   // a firm with a real LawPay account enters it in Firm Settings.
   lawpay_payment_page_url?: string | null;
+  // Designated Twilio phone number for AI voice answering (see migration 0029)
+  phone_answering_number?: string | null;
 }
+
+export interface PhoneCallLog {
+  id: string;
+  firm_id: string;
+  caller_phone?: string | null;
+  caller_name?: string | null;
+  call_duration_seconds?: number | null;
+  summary?: string | null;
+  transcript?: any;
+  outcome_action: 'intake_created' | 'matter_noted' | 'callback_flagged';
+  matched_matter_id?: string | null;
+  created_at: string;
+}
+
 
 export interface PracticeArea {
   id: string;

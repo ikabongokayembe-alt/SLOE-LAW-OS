@@ -54,7 +54,8 @@ interface StoreState {
 
 interface StoreActions {
   refresh: () => Promise<void>;
-  updateFirm: (patch: Partial<Pick<Firm, 'country' | 'region' | 'currency' | 'locale' | 'lawpay_payment_page_url'>>) => Promise<{ error?: string }>;
+  updateFirm: (patch: Partial<Pick<Firm, 'country' | 'region' | 'currency' | 'locale' | 'lawpay_payment_page_url' | 'phone_answering_number'>>) => Promise<{ error?: string }>;
+
   regenerateIntakeToken: () => Promise<{ error?: string }>;
   markInvoicePaid: (invoiceId: string) => Promise<{ error?: string }>;
   addPracticeArea: (pa: { key: string; label: string }) => Promise<{ error?: string }>;
@@ -151,7 +152,8 @@ function loadMockData(): Omit<StoreState, 'loading' | 'error' | 'hasLoadedOnce'>
 
 async function loadAll(firmId: string): Promise<Omit<StoreState, 'loading' | 'error' | 'hasLoadedOnce' | 'integrationConnections'>> {
   const [firmR, attorneysR, practiceAreasR, matterStagesR, partiesR, conflictChecksR, mattersR, deadlinesR, insightsR, documentsR, agentRequestsR, deadlineRulesR, importBatchesR, timeEntriesR, communicationsR, auditLogR, clientInvitesR, clientUsersR, signatureRequestsR, matterPartiesR, partyRelationshipsR, invoicesR] = await Promise.all([
-    supabase.from('firms').select('id,name,country,region,currency,locale,intake_token,lawpay_payment_page_url').eq('id', firmId).single(),
+    supabase.from('firms').select('id,name,country,region,currency,locale,intake_token,lawpay_payment_page_url,phone_answering_number').eq('id', firmId).single(),
+
     supabase.from('attorneys').select('*').eq('firm_id', firmId).order('name'),
     supabase.from('practice_areas').select('*').eq('firm_id', firmId),
     supabase.from('matter_stages').select('*').eq('firm_id', firmId).order('sort_order'),
@@ -327,13 +329,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   // Firm-level jurisdiction/locale settings (country/region/currency/locale).
   // Schema-only fields added in migration 0007 — this is the one place that
   // writes them (see the firm settings screen).
-  const updateFirm = useCallback(async (patch: Partial<Pick<Firm, 'country' | 'region' | 'currency' | 'locale' | 'lawpay_payment_page_url'>>) => {
+  const updateFirm = useCallback(async (patch: Partial<Pick<Firm, 'country' | 'region' | 'currency' | 'locale' | 'lawpay_payment_page_url' | 'phone_answering_number'>>) => {
     if (!isSupabaseConfigured) {
       setState(s => ({ ...s, firm: s.firm ? { ...s.firm, ...patch } : s.firm }));
       showToast('success', 'Saved (preview mode — nothing persists here).');
       return {};
     }
-    const { data, error } = await supabase.from('firms').update(patch).eq('id', firmId).select('id,name,country,region,currency,locale,intake_token,lawpay_payment_page_url').single();
+    const { data, error } = await supabase.from('firms').update(patch).eq('id', firmId).select('id,name,country,region,currency,locale,intake_token,lawpay_payment_page_url,phone_answering_number').single();
+
     if (error || !data) { showToast('error', "Couldn't save firm settings."); return { error: error?.message }; }
     setState(s => ({ ...s, firm: data as Firm }));
     showToast('success', 'Firm settings saved.');
