@@ -2,7 +2,9 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useStore } from '../../lib/store';
 import { useToast } from '../../lib/toast';
-import { Settings, Plus, FileUp, ChevronRight, Copy, RotateCw, UserPlus, CreditCard } from 'lucide-react';
+import { Settings, Plus, FileUp, ChevronRight, Copy, RotateCw, UserPlus, CreditCard, CheckCircle2, AlertCircle, ExternalLink, ShieldCheck } from 'lucide-react';
+import { isLawPayConnected, maskLawPayUrl } from '../../lib/lawpay';
+
 
 function slugify(label: string): string {
   return label.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
@@ -284,31 +286,98 @@ export function SettingsScreen() {
       </div>
 
       <div className="mt-8">
-        <h3 className="text-sm font-medium mb-1">Payment Collection (LawPay)</h3>
-        <p className="text-xs text-[var(--text-secondary)] mb-3">
-          Paste your firm's LawPay hosted payment page link — found in your LawPay account under Payments. Once set, every generated invoice gets a real payment link. Card details are entered on LawPay's own page and never pass through Law OS, which is the entire reason this is an integration rather than a built-in payment form.
-        </p>
-        <form onSubmit={handleSaveLawpay} className="border border-[var(--border-subtle)] rounded-lg p-4 space-y-3">
+        <div className="flex items-center justify-between mb-2">
           <div>
-            <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">LawPay payment page URL</label>
-            <input
-              type="url" value={lawpayUrl} onChange={e => setLawpayUrl(e.target.value)}
-              placeholder="https://secure.lawpay.com/pay/yourfirm"
-              className="w-full h-9 px-3 bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded text-sm focus:outline-none"
-            />
+            <h3 className="text-sm font-medium flex items-center gap-2">
+              <CreditCard className="w-4 h-4 text-[var(--accent-secondary)]" /> Payment Collection (LawPay)
+            </h3>
+            <p className="text-xs text-[var(--text-secondary)] mt-0.5">
+              Connect your firm's LawPay hosted payment page to accept card payments directly on invoices and through the client portal.
+            </p>
           </div>
-          <div className="flex items-center gap-2">
-            <CreditCard className="w-3.5 h-3.5 text-[var(--text-tertiary)] shrink-0" />
-            <button
-              type="submit" disabled={savingLawpay || !lawpayDirty}
-              className="h-8 px-3 bg-[var(--text-primary)] text-[var(--bg-primary)] rounded text-xs font-medium hover:opacity-90 transition-opacity disabled:opacity-40"
-            >
-              {savingLawpay ? 'Saving…' : 'Save'}
-            </button>
-            {!firm?.lawpay_payment_page_url && <span className="text-[11px] text-[var(--text-tertiary)]">No LawPay account connected yet — payment links won't appear on invoices until this is set.</span>}
-          </div>
-        </form>
+          {isLawPayConnected(firm) ? (
+            <span className="flex items-center gap-1.5 text-xs font-medium text-[var(--signal-positive)] bg-[var(--signal-positive)]/10 border border-[var(--signal-positive)]/30 rounded-full px-2.5 py-1">
+              <CheckCircle2 className="w-3.5 h-3.5" /> LawPay Connected
+            </span>
+          ) : (
+            <span className="flex items-center gap-1.5 text-xs font-medium text-[var(--signal-warning)] bg-[var(--signal-warning)]/10 border border-[var(--signal-warning)]/30 rounded-full px-2.5 py-1">
+              <AlertCircle className="w-3.5 h-3.5" /> Not Connected
+            </span>
+          )}
+        </div>
+
+        <div className="border border-[var(--border-subtle)] bg-[var(--bg-secondary)] rounded-lg p-4 space-y-4">
+          {isLawPayConnected(firm) ? (
+            <div className="bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded-md p-3 text-xs space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="font-medium text-[var(--text-primary)] flex items-center gap-1.5">
+                  <ShieldCheck className="w-4 h-4 text-[var(--signal-positive)]" /> Active Payment Endpoint
+                </span>
+                <a
+                  href={firm?.lawpay_payment_page_url!}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1 text-[var(--accent-secondary)] hover:underline"
+                >
+                  Visit Hosted Page <ExternalLink className="w-3 h-3" />
+                </a>
+              </div>
+              <div className="font-mono text-[var(--text-secondary)] bg-[var(--bg-primary)] px-2.5 py-1.5 rounded border border-[var(--border-subtle)] truncate">
+                {maskLawPayUrl(firm?.lawpay_payment_page_url)}
+              </div>
+              <p className="text-[var(--text-tertiary)]">
+                Online payment links are active across all generated invoices and client-facing surfaces. Payments complete securely on LawPay's PCI-compliant hosted checkout.
+              </p>
+            </div>
+          ) : (
+            <div className="bg-[var(--signal-warning)]/5 border border-[var(--signal-warning)]/20 rounded-md p-3 text-xs text-[var(--text-secondary)] space-y-1">
+              <p className="font-medium text-[var(--text-primary)]">What connecting LawPay unlocks:</p>
+              <ul className="list-disc list-inside space-y-0.5 text-[var(--text-secondary)] pl-1">
+                <li>Automatic PCI-compliant online payment links generated on all invoices</li>
+                <li>One-click direct invoice payment option inside the Client Portal</li>
+                <li>Webhook-confirmed automatic payment reconciliation</li>
+              </ul>
+            </div>
+          )}
+
+          <form onSubmit={handleSaveLawpay} className="space-y-3 pt-1">
+            <div>
+              <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">
+                {isLawPayConnected(firm) ? 'Update LawPay payment page URL' : 'LawPay payment page URL'}
+              </label>
+              <input
+                type="url"
+                value={lawpayUrl}
+                onChange={e => setLawpayUrl(e.target.value)}
+                placeholder="https://secure.lawpay.com/pay/yourfirm"
+                className="w-full h-9 px-3 bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded text-sm focus:outline-none focus:border-[var(--border-strong)]"
+              />
+              <span className="text-[11px] text-[var(--text-tertiary)] mt-1 block">
+                Found in your LawPay merchant account dashboard under <em>Payments &gt; Hosted Payment Pages</em>.
+              </span>
+            </div>
+            <div className="flex items-center gap-3">
+              <button
+                type="submit"
+                disabled={savingLawpay || !lawpayDirty}
+                className="h-8 px-4 bg-[var(--text-primary)] text-[var(--bg-primary)] rounded text-xs font-medium hover:opacity-90 transition-opacity disabled:opacity-40"
+              >
+                {savingLawpay ? 'Saving…' : 'Save Connection'}
+              </button>
+              {lawpayDirty && (
+                <button
+                  type="button"
+                  onClick={() => setLawpayUrl(firm?.lawpay_payment_page_url ?? '')}
+                  className="text-xs text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+                >
+                  Cancel
+                </button>
+              )}
+            </div>
+          </form>
+        </div>
       </div>
+
 
       <div className="mt-8">
         <h3 className="text-sm font-medium mb-1">Data Import</h3>

@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
-import { LogOut, FileText, Download } from 'lucide-react';
+import { LogOut, FileText, Download, Receipt, CreditCard, ExternalLink, CheckCircle2 } from 'lucide-react';
 import { useClientAuth } from '../../lib/clientAuth';
 import { supabase } from '../../lib/supabase';
+import { Invoice } from '../../types';
+import { buildLawPayPaymentLink } from '../../lib/lawpay';
 
 // Plain-language status per matter_stages.stage_key — never shown the
 // internal stage_key or the firm's own stage label verbatim (a client
@@ -30,6 +32,8 @@ export function PortalDashboard() {
   const [matters, setMatters] = useState<PortalMatter[]>([]);
   const [stageLabels, setStageLabels] = useState<Record<string, string>>({}); // stage_id -> stage_key
   const [documents, setDocuments] = useState<PortalDocument[]>([]);
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [lawpayUrl, setLawpayUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -40,14 +44,20 @@ export function PortalDashboard() {
       // these queries to exactly this client's own party. A stray bug
       // here that forgot a filter still can't leak another client's
       // data — the database enforces it, not this component.
-      const [mattersRes, docsRes] = await Promise.all([
+      const [mattersRes, docsRes, invoicesRes, firmRes] = await Promise.all([
         supabase.from('matters').select('id, title, stage_id, opened_date').order('opened_date', { ascending: false }),
         supabase.from('documents').select('id, matter_id, file_name, storage_path, created_at').order('created_at', { ascending: false }),
+        supabase.from('invoices').select('*').order('created_at', { ascending: false }),
+        clientProfile?.firm_id ? supabase.from('firms').select('lawpay_payment_page_url').eq('id', clientProfile.firm_id).maybeSingle() : Promise.resolve({ data: null }),
       ]);
       if (cancelled) return;
       const mattersList = (mattersRes.data ?? []) as PortalMatter[];
       setMatters(mattersList);
       setDocuments((docsRes.data ?? []) as PortalDocument[]);
+      setInvoices((invoicesRes.data ?? []) as Invoice[]);
+      if (firmRes?.data?.lawpay_payment_page_url) {
+        setLawpayUrl(firmRes.data.lawpay_payment_page_url);
+      }
 
       const stageIds = [...new Set(mattersList.map(m => m.stage_id))];
       if (stageIds.length > 0) {
@@ -59,7 +69,7 @@ export function PortalDashboard() {
       setLoading(false);
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [clientProfile?.firm_id]);
 
   const handleDownload = async (storagePath: string) => {
     const { data, error } = await supabase.storage.from('matter-documents').createSignedUrl(storagePath, 60);
@@ -88,27 +98,100 @@ export function PortalDashboard() {
           <div className="space-y-6">
             {matters.map(m => {
               const matterDocs = documents.filter(d => d.matter_id === m.id);
-              return (
-                <div key={m.id} className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg p-5">
-                  <h2 className="text-base font-medium mb-1">{m.title}</h2>
-                  <p className="text-sm text-[var(--text-secondary)] mb-4">{plainStageLabel(stageLabels[m.stage_id])}</p>
+              const matterInvoices = invoices.filter(i => i.matter_id === m.id);
+              const unpaidInvoices = matterInvoices.filter(i => i.status === 'unpaid');
+              const paidInvoices = matterInvoices.filter(i => i.status === 'paid');
 
-                  <div className="text-[10px] uppercase font-mono tracking-wider text-[var(--text-tertiary)] mb-2">Shared documents</div>
-                  {matterDocs.length === 0 ? (
-                    <div className="text-xs text-[var(--text-tertiary)] italic">Nothing has been shared with you on this matter yet.</div>
-                  ) : (
-                    <div className="space-y-1.5">
-                      {matterDocs.map(d => (
-                        <div key={d.id} className="flex items-center gap-2 text-sm bg-[var(--bg-tertiary)] rounded px-3 py-2">
-                          <FileText className="w-3.5 h-3.5 text-[var(--text-tertiary)] shrink-0" />
-                          <span className="flex-1 min-w-0 truncate">{d.file_name}</span>
-                          <button onClick={() => handleDownload(d.storage_path)} className="text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors shrink-0">
-                            <Download className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      ))}
+              return (
+                <div key={m.id} className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg p-5 space-y-5">
+                  <div>
+                    <h2 className="text-base font-medium mb-1">{m.title}</h2>
+                    <p className="text-sm text-[var(--text-secondary)]">{plainStageLabel(stageLabels[m.stage_id])}</p>
+                  </div>
+
+                  {/* Invoices Section */}
+                  <div>
+                    <div className="text-[10px] uppercase font-mono tracking-wider text-[var(--text-tertiary)] mb-2 flex items-center gap-1.5">
+                      <Receipt className="w-3.5 h-3.5" /> Invoices & Billing
                     </div>
-                  )}
+                    {matterInvoices.length === 0 ? (
+                      <div className="text-xs text-[var(--text-tertiary)] italic bg-[var(--bg-tertiary)] rounded-lg p-3">
+                        No invoices issued for this matter yet.
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {unpaidInvoices.map(inv => {
+                          const paymentLink = lawpayUrl ? buildLawPayPaymentLink({ lawpay_payment_page_url: lawpayUrl }, inv, undefined) : null;
+                          return (
+                            <div key={inv.id} className="bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded-lg p-3 space-y-2">
+                              <div className="flex items-center justify-between">
+                                <div>
+                                  <span className="text-sm font-medium">{inv.invoice_number}</span>
+                                  <div className="text-xs text-[var(--text-tertiary)]">
+                                    Issued {new Date(inv.issued_date).toLocaleDateString()}
+                                  </div>
+                                </div>
+                                <div className="text-right">
+                                  <div className="text-sm font-semibold text-[var(--text-primary)]">
+                                    ${inv.total_amount !== null ? inv.total_amount.toFixed(2) : '0.00'}
+                                  </div>
+                                  <span className="inline-block text-[10px] uppercase tracking-wider text-[var(--signal-warning)] bg-[var(--signal-warning)]/10 px-2 py-0.5 rounded-full font-medium">
+                                    Payment Due
+                                  </span>
+                                </div>
+                              </div>
+
+                              {paymentLink ? (
+                                <a
+                                  href={paymentLink}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="w-full h-9 flex items-center justify-center gap-2 bg-[var(--text-primary)] text-[var(--bg-primary)] rounded text-xs font-medium hover:opacity-90 transition-opacity"
+                                >
+                                  <CreditCard className="w-3.5 h-3.5" /> Pay ${inv.total_amount !== null ? inv.total_amount.toFixed(2) : '0.00'} via LawPay <ExternalLink className="w-3 h-3 opacity-70" />
+                                </a>
+                              ) : (
+                                <div className="text-xs text-[var(--text-tertiary)] bg-[var(--bg-secondary)] p-2 rounded text-center border border-[var(--border-subtle)]">
+                                  Online payment is not configured yet. Please contact your firm directly to complete payment.
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+
+                        {paidInvoices.map(inv => (
+                          <div key={inv.id} className="bg-[var(--bg-tertiary)]/60 border border-[var(--border-subtle)] rounded-lg p-2.5 flex items-center justify-between text-xs">
+                            <div className="flex items-center gap-2">
+                              <CheckCircle2 className="w-3.5 h-3.5 text-[var(--signal-positive)]" />
+                              <span>{inv.invoice_number}</span>
+                              <span className="text-[var(--text-tertiary)]">· ${inv.total_amount !== null ? inv.total_amount.toFixed(2) : '0.00'}</span>
+                            </div>
+                            <span className="text-[var(--signal-positive)] font-medium">Paid</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Documents Section */}
+                  <div>
+                    <div className="text-[10px] uppercase font-mono tracking-wider text-[var(--text-tertiary)] mb-2">Shared documents</div>
+                    {matterDocs.length === 0 ? (
+                      <div className="text-xs text-[var(--text-tertiary)] italic">Nothing has been shared with you on this matter yet.</div>
+                    ) : (
+                      <div className="space-y-1.5">
+                        {matterDocs.map(d => (
+                          <div key={d.id} className="flex items-center gap-2 text-sm bg-[var(--bg-tertiary)] rounded px-3 py-2">
+                            <FileText className="w-3.5 h-3.5 text-[var(--text-tertiary)] shrink-0" />
+                            <span className="flex-1 min-w-0 truncate">{d.file_name}</span>
+                            <button onClick={() => handleDownload(d.storage_path)} className="text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors shrink-0">
+                              <Download className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
               );
             })}
@@ -118,3 +201,4 @@ export function PortalDashboard() {
     </div>
   );
 }
+

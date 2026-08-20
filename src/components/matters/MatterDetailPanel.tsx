@@ -4,7 +4,7 @@ import { useStore } from '../../lib/store';
 import { useAuth } from '../../lib/auth';
 import { useToast } from '../../lib/toast';
 import { supabase } from '../../lib/supabase';
-import { buildLawPayPaymentLink } from '../../lib/lawpay';
+import { buildLawPayPaymentLink, isLawPayConnected } from '../../lib/lawpay';
 import { DetailPanel, DetailSection } from '../shared/DetailPanel';
 import { ConflictCheckDetailContent } from '../parties/ConflictCheckDetail';
 import { DocumentPreviewPanel } from '../documents/DocumentPreview';
@@ -12,7 +12,8 @@ import { findBottlenecks, assessDeadlineRisk, findDocumentGaps } from '../../lib
 import { buildUrgentActions } from '../../lib/urgentActions';
 import { formatDateOnly } from '../../lib/dates';
 import { computeAmount, formatAmount, formatHours } from '../../lib/timeEntries';
-import { AlertTriangle, Clock, FileText, ShieldCheck, ShieldAlert, UserPlus, X, Receipt, Link2, CheckCircle2 } from 'lucide-react';
+import { AlertTriangle, Clock, FileText, ShieldCheck, ShieldAlert, UserPlus, X, Receipt, Link2, CheckCircle2, CreditCard } from 'lucide-react';
+
 
 const ROLE_LABEL: Record<MatterPartyRole, string> = {
   client: 'Client', opposing: 'Opposing', witness: 'Witness', co_counsel: 'Co-counsel', other: 'Other',
@@ -276,15 +277,21 @@ export function MatterDetailPanel({ matter, onClose }: { matter: Matter; onClose
                     onClick={() => handleDownload(inv.storage_path, `${inv.invoice_number}.pdf`)}
                     className="w-full flex items-center justify-between gap-2 text-sm text-left hover:opacity-80 transition-opacity"
                   >
-                    <span className="flex items-center gap-1.5 min-w-0">
+                    <span className="flex items-center gap-1.5 min-w-0 flex-wrap">
                       <Receipt className="w-3.5 h-3.5 text-[var(--text-tertiary)] shrink-0" />
                       <span className="truncate">{inv.invoice_number}</span>
                       {inv.status === 'paid' ? (
-                        <span className="flex items-center gap-1 text-[10px] uppercase tracking-wider text-[var(--signal-positive)] bg-[var(--signal-positive)]/10 rounded-full px-1.5 py-0.5 shrink-0">
+                        <span className="flex items-center gap-1 text-[10px] uppercase tracking-wider text-[var(--signal-positive)] bg-[var(--signal-positive)]/10 rounded-full px-1.5 py-0.5 shrink-0 font-medium">
                           <CheckCircle2 className="w-2.5 h-2.5" /> Paid
                         </span>
+                      ) : isLawPayConnected(firm) ? (
+                        <span className="flex items-center gap-1 text-[10px] uppercase tracking-wider text-[var(--accent-secondary)] bg-[var(--accent-secondary)]/10 rounded-full px-1.5 py-0.5 shrink-0 font-medium" title="Online LawPay checkout enabled">
+                          <CreditCard className="w-2.5 h-2.5" /> LawPay Ready
+                        </span>
                       ) : (
-                        <span className="text-[10px] uppercase tracking-wider text-[var(--text-tertiary)] bg-[var(--bg-secondary)] rounded-full px-1.5 py-0.5 shrink-0">Unpaid</span>
+                        <span className="text-[10px] uppercase tracking-wider text-[var(--text-tertiary)] bg-[var(--bg-secondary)] rounded-full px-1.5 py-0.5 shrink-0" title="LawPay not configured in Firm Settings">
+                          Manual Payment Only
+                        </span>
                       )}
                     </span>
                     <span className="text-xs text-[var(--text-tertiary)] shrink-0 ml-2">
@@ -293,25 +300,41 @@ export function MatterDetailPanel({ matter, onClose }: { matter: Matter; onClose
                     </span>
                   </button>
                   {inv.status === 'unpaid' && (
-                    <div className="flex items-center gap-3 mt-1.5 pl-5">
-                      <button onClick={() => handleCopyPaymentLink(inv.id)} className="flex items-center gap-1 text-[11px] text-[var(--accent-secondary)] hover:underline">
-                        <Link2 className="w-3 h-3" /> Copy payment link
-                      </button>
-                      <button
-                        onClick={() => handleMarkPaid(inv.id)}
-                        disabled={markingPaidId === inv.id}
-                        className="flex items-center gap-1 text-[11px] text-[var(--text-tertiary)] hover:text-[var(--signal-positive)] disabled:opacity-40"
-                      >
-                        <CheckCircle2 className="w-3 h-3" /> {markingPaidId === inv.id ? 'Marking…' : 'Mark as paid'}
-                      </button>
+                    <div className="flex items-center justify-between mt-1.5 pl-5 text-[11px]">
+                      <div className="flex items-center gap-3">
+                        <button
+                          onClick={() => handleCopyPaymentLink(inv.id)}
+                          className="flex items-center gap-1 text-[var(--accent-secondary)] hover:underline font-medium"
+                          title={isLawPayConnected(firm) ? 'Copy LawPay payment link' : 'Copy payment link (LawPay connection required)'}
+                        >
+                          <Link2 className="w-3 h-3" /> {isLawPayConnected(firm) ? 'Copy LawPay link' : 'Copy payment link'}
+                        </button>
+                        <button
+                          onClick={() => handleMarkPaid(inv.id)}
+                          disabled={markingPaidId === inv.id}
+                          className="flex items-center gap-1 text-[var(--text-tertiary)] hover:text-[var(--signal-positive)] disabled:opacity-40"
+                        >
+                          <CheckCircle2 className="w-3 h-3" /> {markingPaidId === inv.id ? 'Marking…' : 'Mark as paid'}
+                        </button>
+                      </div>
+                      {!isLawPayConnected(firm) && (
+                        <span className="text-[10px] text-[var(--text-tertiary)] italic">LawPay disconnected</span>
+                      )}
                     </div>
                   )}
                   {inv.status === 'paid' && inv.paid_at && (
-                    <div className="text-[11px] text-[var(--text-tertiary)] mt-1 pl-5">
-                      Paid {new Date(inv.paid_at).toLocaleDateString(locale, { day: 'numeric', month: 'short', year: 'numeric' })}
-                      {inv.lawpay_charge_id ? ' — confirmed via LawPay' : ' — recorded manually'}
+                    <div className="flex items-center gap-1 text-[11px] text-[var(--text-tertiary)] mt-1 pl-5">
+                      <span>Paid {new Date(inv.paid_at).toLocaleDateString(locale, { day: 'numeric', month: 'short', year: 'numeric' })}</span>
+                      {inv.lawpay_charge_id ? (
+                        <span className="flex items-center gap-1 text-[var(--signal-positive)] font-medium">
+                          · <CheckCircle2 className="w-3 h-3 inline" /> Confirmed via LawPay
+                        </span>
+                      ) : (
+                        <span>· Recorded manually</span>
+                      )}
                     </div>
                   )}
+
                 </div>
               ))}
             </div>

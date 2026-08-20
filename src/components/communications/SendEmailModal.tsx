@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useStore } from '../../lib/store';
-import { X, Mail } from 'lucide-react';
+import { X, Mail, CreditCard } from 'lucide-react';
+import { buildLawPayPaymentLink, isLawPayConnected } from '../../lib/lawpay';
 
 const labelClass = 'text-[10px] uppercase font-mono tracking-wider text-[var(--text-tertiary)] block mb-1';
 const inputClass = 'w-full h-10 px-3 bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded text-sm focus:outline-none';
@@ -9,7 +10,7 @@ const inputClass = 'w-full h-10 px-3 bg-[var(--bg-tertiary)] border border-[var(
 // Same modal shell as LogTimeModal/NewMatterModal — a single form, one
 // container/header/token style, no reinvented visual language.
 export function SendEmailModal({ onClose, defaultMatterId, defaultSubject, defaultBody, defaultTo }: { onClose: () => void; defaultMatterId?: string; defaultSubject?: string; defaultBody?: string; defaultTo?: string }) {
-  const { matters, integrationConnections, sendMatterCommunication } = useStore();
+  const { matters, integrationConnections, sendMatterCommunication, firm, invoices, parties } = useStore();
 
   const [matterId, setMatterId] = useState(defaultMatterId ?? matters[0]?.id ?? '');
   const [to, setTo] = useState(defaultTo ?? '');
@@ -20,6 +21,19 @@ export function SendEmailModal({ onClose, defaultMatterId, defaultSubject, defau
   const gmailConnected = integrationConnections?.some(c => c.toolkit_slug === 'gmail' && c.status === 'ACTIVE') ?? null;
   const emailValid = /\S+@\S+\.\S+/.test(to.trim());
   const canSubmit = !!matterId && emailValid && subject.trim() !== '' && body.trim() !== '' && gmailConnected === true;
+
+  const currentMatter = matters.find(m => m.id === matterId);
+  const clientParty = currentMatter ? parties.find(p => p.id === currentMatter.client_party_id) : undefined;
+  const unpaidInvoice = invoices.find(i => i.matter_id === matterId && i.status === 'unpaid');
+  const lawPayLinkAvailable = firm && isLawPayConnected(firm) && unpaidInvoice;
+
+  const handleInsertPaymentLink = () => {
+    if (!firm || !unpaidInvoice) return;
+    const link = buildLawPayPaymentLink(firm, unpaidInvoice, clientParty);
+    if (!link) return;
+    const paymentText = `\n\n--- Online Payment Information ---\nTo pay Invoice ${unpaidInvoice.invoice_number} ($${unpaidInvoice.total_amount !== null ? unpaidInvoice.total_amount.toFixed(2) : '0.00'}) securely online via LawPay, please use the following link:\n${link}\n`;
+    setBody(prev => prev + paymentText);
+  };
 
   const handleSubmit = async () => {
     if (!canSubmit) return;
@@ -81,7 +95,18 @@ export function SendEmailModal({ onClose, defaultMatterId, defaultSubject, defau
             </div>
 
             <div>
-              <label className={labelClass}>Body</label>
+              <div className="flex items-center justify-between mb-1">
+                <label className={labelClass}>Body</label>
+                {lawPayLinkAvailable && (
+                  <button
+                    type="button"
+                    onClick={handleInsertPaymentLink}
+                    className="text-[11px] text-[var(--accent-secondary)] hover:underline flex items-center gap-1 font-medium"
+                  >
+                    <CreditCard className="w-3 h-3" /> Insert LawPay Payment Link
+                  </button>
+                )}
+              </div>
               <textarea
                 value={body} onChange={e => setBody(e.target.value)} rows={6}
                 className="w-full px-3 py-2 bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded text-sm focus:outline-none resize-none"
@@ -105,3 +130,4 @@ export function SendEmailModal({ onClose, defaultMatterId, defaultSubject, defau
     </div>
   );
 }
+

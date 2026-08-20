@@ -41,3 +41,26 @@ export function buildLawPayPaymentLink(firm: Pick<Firm, 'lawpay_payment_page_url
   const base = firm.lawpay_payment_page_url.replace(/\/+$/, '');
   return `${base}?${params.toString()}`;
 }
+
+export function isLawPayConnected(firm: Pick<Firm, 'lawpay_payment_page_url'> | null | undefined): boolean {
+  return !!(firm?.lawpay_payment_page_url && firm.lawpay_payment_page_url.trim().length > 0);
+}
+
+export function maskLawPayUrl(url: string | null | undefined): string {
+  if (!url || !url.trim()) return '';
+  const trimmed = url.trim().replace(/\/+$/, '');
+  try {
+    const parsed = new URL(trimmed);
+    const parts = parsed.pathname.split('/').filter(Boolean);
+    if (parts.length > 1) {
+      const slug = parts[parts.length - 1];
+      const maskedSlug = slug.length > 4 ? `${slug.slice(0, 2)}•••${slug.slice(-2)}` : '••••';
+      parts[parts.length - 1] = maskedSlug;
+      return `${parsed.origin}/${parts.join('/')}`;
+    }
+    return `${parsed.origin}${parsed.pathname.slice(0, 10)}...`;
+  } catch {
+    return trimmed.length > 25 ? `${trimmed.slice(0, 15)}...${trimmed.slice(-8)}` : trimmed;
+  }
+}
+
