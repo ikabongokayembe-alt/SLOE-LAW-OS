@@ -96,7 +96,7 @@ export interface PartyRelationship {
   created_at: string;
 }
 
-export type ConflictCheckStatus = 'pending' | 'cleared' | 'flagged' | 'waived';
+export type ConflictCheckStatus = 'pending' | 'cleared' | 'flagged' | 'waived' | 'pending_review';
 
 export interface ConflictCheck {
   id: string;
