@@ -78,16 +78,25 @@ export function SpecialistAgentScreen() {
     // every specialist — wiring it here covers all six, not just this
     // agent. Checked before the specialist's own model call so a
     // detected email request doesn't ALSO get answered as prose.
-    const composed = await tryComposeEmail(text, { matters, parties, clientInvites, communications });
-    if (composed) {
-      const ack = composed.recipientResolved
-        ? `I've drafted an email to ${composed.partyName ?? 'the recipient'} — review it in the panel that just opened before sending.`
-        : `I've drafted the email content, but there's no email address on file for ${composed.partyName ?? 'that person'} — I've opened the draft so you can add one and review before sending.`;
-      setChatHistory(prev => [...prev, { role: 'assistant', content: ack }]);
-      setEmailDraft(composed);
-      setStreamingContent('');
-      setIsTyping(false);
-      return;
+    try {
+      setDraftingStatus('Analyzing request…');
+      const composed = await tryComposeEmail(
+        text,
+        { matters, parties, clientInvites, communications },
+        (status) => setDraftingStatus(status)
+      );
+      if (composed) {
+        const ack = composed.recipientResolved
+          ? `I've drafted an email to ${composed.partyName ?? 'the recipient'} — review it in the panel that just opened before sending.`
+          : `I've drafted the email content, but there's no email address on file for ${composed.partyName ?? 'that person'} — I've opened the draft so you can add one and review before sending.`;
+        setChatHistory(prev => [...prev, { role: 'assistant', content: ack }]);
+        setEmailDraft(composed);
+        setStreamingContent('');
+        setIsTyping(false);
+        return;
+      }
+    } finally {
+      setDraftingStatus(null);
     }
 
     try {
@@ -116,7 +125,7 @@ export function SpecialistAgentScreen() {
   };
 
   return (
-    <div className="flex flex-col h-[calc(100vh-56px)] -mx-4 md:-mx-8 -mt-6">
+    <div className="flex flex-col h-[calc(100dvh-56px)] -mx-4 md:-mx-8 -mt-6">
       {emailDraft && (
         <SendEmailModal
           onClose={() => setEmailDraft(null)}
@@ -126,32 +135,27 @@ export function SpecialistAgentScreen() {
           defaultBody={emailDraft.body}
         />
       )}
-      <div className="min-h-[4rem] bg-[var(--bg-secondary)] border-b border-[var(--border-subtle)] px-4 md:px-8 py-2 sm:py-0 flex flex-col sm:flex-row sm:items-center justify-between gap-1 sm:gap-2 shrink-0">
-        <div className="flex items-center gap-2 min-w-0">
-          <specialist.icon className="w-4 h-4 text-[var(--text-secondary)] shrink-0" />
-          <h2 className="text-sm font-medium truncate">{specialist.name}</h2>
-          <span className="text-xs text-[var(--text-tertiary)] truncate hidden sm:inline">— {specialist.description}</span>
+      <div className="h-16 bg-[var(--bg-secondary)] border-b border-[var(--border-subtle)] px-4 md:px-8 flex items-center justify-between shrink-0">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-lg bg-[var(--bg-tertiary)] flex items-center justify-center">
+            <specialist.icon className="w-4 h-4" />
+          </div>
+          <div>
+            <h2 className="text-sm font-medium">{specialist.name}</h2>
+            <p className="text-xs text-[var(--text-tertiary)]">{specialist.roleName}</p>
+          </div>
         </div>
-        <div className="flex items-center gap-3 shrink-0">
-          <AiDisclaimer />
-          <button
-            onClick={handleRemove}
-            title="Remove this agent"
-            className="flex items-center gap-1 text-xs text-[var(--text-tertiary)] hover:text-[var(--signal-negative)] transition-colors"
-          >
-            <X className="w-3.5 h-3.5" /> Remove
-          </button>
-        </div>
+        <AiDisclaimer />
       </div>
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 md:px-8 py-6 max-w-3xl mx-auto w-full">
-        {chatHistory.length === 0 && !isTyping && (
-          <div className="text-xs text-[var(--text-tertiary)] mb-3">
-            <p className="mb-1">{specialist.description}</p>
-            <p>{specialist.access}</p>
-          </div>
-        )}
         <div className="space-y-4">
+          <div className="flex justify-start">
+            <div className="max-w-[85%] rounded-lg px-4 py-2.5 text-sm bg-[var(--bg-secondary)] border border-[var(--border-subtle)]">
+              <ReactMarkdown>{`Hello! I'm your ${specialist.name}. ${specialist.description} How can I assist you with your active matters today?`}</ReactMarkdown>
+            </div>
+          </div>
+
           {chatHistory.map((m, i) => (
             <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
               <div className={`max-w-[85%] rounded-lg px-4 py-2.5 text-sm ${m.role === 'user' ? 'bg-[var(--text-primary)] text-[var(--bg-primary)]' : 'bg-[var(--bg-secondary)] border border-[var(--border-subtle)]'}`}>
@@ -161,8 +165,17 @@ export function SpecialistAgentScreen() {
           ))}
           {isTyping && (
             <div className="flex justify-start">
-              <div className="max-w-[85%] rounded-lg px-4 py-2.5 text-sm bg-[var(--bg-secondary)] border border-[var(--border-subtle)]">
-                <ReactMarkdown>{streamingContent || '…'}</ReactMarkdown>
+              <div className="max-w-[85%] rounded-lg px-4 py-2.5 text-sm bg-[var(--bg-secondary)] border border-[var(--border-subtle)] flex items-center gap-2">
+                {streamingContent ? (
+                  <ReactMarkdown>{streamingContent}</ReactMarkdown>
+                ) : (
+                  <>
+                    <div className="w-2 h-2 rounded-full bg-[var(--accent-primary)] animate-pulse shrink-0" />
+                    <span className="text-xs text-[var(--text-secondary)] italic">
+                      {draftingStatus || 'Analyzing request & drafting response…'}
+                    </span>
+                  </>
+                )}
               </div>
             </div>
           )}

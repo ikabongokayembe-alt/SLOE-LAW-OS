@@ -27,15 +27,22 @@ async function getAuthHeader(): Promise<string> {
 
 async function callEdge(body: { prompt: string; expectJson?: boolean; stream?: boolean; feature?: string }) {
   const authHeader = await getAuthHeader();
-  return fetch(AI_ENDPOINT, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: authHeader,
-      apikey: ANON,
-    },
-    body: JSON.stringify(body),
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 12000);
+  try {
+    return await fetch(AI_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: authHeader,
+        apikey: ANON,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 function ensureJsonHint(prompt: string) {
