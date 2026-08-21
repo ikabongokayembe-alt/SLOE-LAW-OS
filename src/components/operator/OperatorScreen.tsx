@@ -31,6 +31,7 @@ export function OperatorScreen() {
   // Instant optimistic prompt tracking to prevent empty-chat flash on handoff mount
   const initialQuery = searchParams.get('q');
   const [pendingPrompt, setPendingPrompt] = useState<string | null>(initialQuery);
+  const [draftingStatus, setDraftingStatus] = useState<string | null>(null);
 
   // Bumped on every write so the rail refetches — see ConversationInbox.
   const [refreshKey, setRefreshKey] = useState(0);
@@ -41,14 +42,17 @@ export function OperatorScreen() {
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }, [messages, streaming, pendingPrompt]);
+  }, [messages, streaming, pendingPrompt, draftingStatus]);
 
   // Arriving from a handoff (e.g. Deadline detail panel) with a real pre-filled query
   useEffect(() => {
     const q = searchParams.get('q');
     if (q) {
       setSearchParams({}, { replace: true });
-      handleSend(q).finally(() => setPendingPrompt(null));
+      handleSend(q).finally(() => {
+        setPendingPrompt(null);
+        setDraftingStatus(null);
+      });
     }
   }, []);
 
@@ -63,17 +67,26 @@ export function OperatorScreen() {
     // emailCompose.ts for the two-pass classify (cheap, every message)
     // + compose (only on a real email request) split, and for why the
     // recipient address is resolved in code and never by the model.
-    const composed = await tryComposeEmail(text, { matters, parties, clientInvites, communications });
-    if (composed) {
-      const ack = composed.recipientResolved
-        ? `I've drafted an email to ${composed.partyName ?? 'the recipient'} — review it in the panel that just opened before sending.`
-        : `I've drafted the email content, but there's no email address on file for ${composed.partyName ?? 'that person'} — I've opened the draft so you can add one and review before sending.`;
-      // A static reply, not a second Gemini call: `run` only needs to
-      // resolve to text, and reusing send() here keeps this turn on the
-      // exact same persistence/unread path as every other message.
-      await send(text, async (_history, onChunk) => { onChunk(ack); return ack; });
-      setEmailDraft(composed);
-      return;
+    try {
+      setDraftingStatus('Analyzing request…');
+      const composed = await tryComposeEmail(
+        text,
+        { matters, parties, clientInvites, communications },
+        (status) => setDraftingStatus(status)
+      );
+      if (composed) {
+        const ack = composed.recipientResolved
+          ? `I've drafted an email to ${composed.partyName ?? 'the recipient'} — review it in the panel that just opened before sending.`
+          : `I've drafted the email content, but there's no email address on file for ${composed.partyName ?? 'that person'} — I've opened the draft so you can add one and review before sending.`;
+        // A static reply, not a second Gemini call: `run` only needs to
+        // resolve to text, and reusing send() here keeps this turn on the
+        // exact same persistence/unread path as every other message.
+        await send(text, async (_history, onChunk) => { onChunk(ack); return ack; });
+        setEmailDraft(composed);
+        return;
+      }
+    } finally {
+      setDraftingStatus(null);
     }
 
     // The context is rebuilt per message rather than per conversation:
@@ -162,8 +175,17 @@ export function OperatorScreen() {
               ))}
               {(busy || (pendingPrompt && messages.length === 0)) && (
                 <div className="flex justify-start">
-                  <div className="max-w-[85%] rounded-lg px-4 py-2.5 text-sm bg-[var(--bg-secondary)] border border-[var(--border-subtle)]">
-                    <ReactMarkdown>{streaming || '…'}</ReactMarkdown>
+                  <div className="max-w-[85%] rounded-lg px-4 py-2.5 text-sm bg-[var(--bg-secondary)] border border-[var(--border-subtle)] flex items-center gap-2">
+                    {streaming ? (
+                      <ReactMarkdown>{streaming}</ReactMarkdown>
+                    ) : (
+                      <>
+                        <div className="w-2 h-2 rounded-full bg-[var(--accent-primary)] animate-pulse shrink-0" />
+                        <span className="text-xs text-[var(--text-secondary)] italic">
+                          {draftingStatus || 'Analyzing request & drafting…'}
+                        </span>
+                      </>
+                    )}
                   </div>
                 </div>
               )}

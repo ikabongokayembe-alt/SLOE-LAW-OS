@@ -82,12 +82,20 @@ export function resolveRecipientEmail(
 }
 
 async function classifyIsEmailRequest(message: string): Promise<boolean> {
-  // Fast regex pre-filter — if message clearly doesn't ask to draft/write an email, save 3-4s latency overhead
-  if (!/\b(email|draft an email|write an email|compose an email|send an email|outreach|client update)\b/i.test(message)) {
+  const trimmed = message.trim();
+  // 1. Direct match: if prompt explicitly begins with or includes direct email drafting instructions, return true IMMEDIATELY (0ms latency)
+  if (/^(draft|write|compose|send)\b.*?\b(email|message|letter|client update)\b/i.test(trimmed) ||
+      /\bdraft (an? )?(update )?email\b/i.test(trimmed)) {
+    return true;
+  }
+
+  // 2. Fast regex pre-filter — if message clearly doesn't ask to draft/write an email, save 3-4s latency overhead
+  if (!/\b(email|draft an email|write an email|compose an email|send an email|outreach|client update)\b/i.test(trimmed)) {
     return false;
   }
+
   try {
-    const out = await callGemini(emailIntentClassifyPrompt(message), false, 'email_draft_classify');
+    const out = await callGemini(emailIntentClassifyPrompt(trimmed), false, 'email_draft_classify');
     return /^\s*yes\b/i.test(String(out));
   } catch {
     return false; // a classification failure must fall through to normal chat, never block it
@@ -99,8 +107,15 @@ async function classifyIsEmailRequest(message: string): Promise<boolean> {
 // should proceed with its normal chat reply instead. This is a
 // deliberate fail-open-to-normal-chat, not a fail-open-to-sending:
 // nothing in this module can cause an email to go out.
-export async function tryComposeEmail(message: string, ctx: EmailComposeContext): Promise<ComposedEmail | null> {
+export async function tryComposeEmail(
+  message: string,
+  ctx: EmailComposeContext,
+  onStatus?: (status: string) => void,
+): Promise<ComposedEmail | null> {
+  onStatus?.('Checking email request…');
   if (!(await classifyIsEmailRequest(message))) return null;
+
+  onStatus?.('Drafting your email & matching matter contacts…');
 
   const matterCandidates = ctx.matters.slice(0, MAX_CANDIDATES).map(m => ({ id: m.id, label: m.title }));
   const partyCandidates = ctx.parties.slice(0, MAX_CANDIDATES).map(p => ({ id: p.id, label: p.name }));
