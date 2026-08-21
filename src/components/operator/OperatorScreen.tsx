@@ -23,10 +23,14 @@ const SUGGESTIONS = [
 ];
 
 export function OperatorScreen() {
-  const { matters, deadlines, parties, conflictChecks, firm, clientInvites, communications } = useStore();
+  const { matters, deadlines, parties, conflictChecks, documents, firm, clientInvites, communications } = useStore();
   const [inputValue, setInputValue] = useState('');
   const [emailDraft, setEmailDraft] = useState<ComposedEmail | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
+
+  // Instant optimistic prompt tracking to prevent empty-chat flash on handoff mount
+  const initialQuery = searchParams.get('q');
+  const [pendingPrompt, setPendingPrompt] = useState<string | null>(initialQuery);
 
   // Bumped on every write so the rail refetches — see ConversationInbox.
   const [refreshKey, setRefreshKey] = useState(0);
@@ -37,14 +41,14 @@ export function OperatorScreen() {
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }, [messages, streaming]);
+  }, [messages, streaming, pendingPrompt]);
 
   // Arriving from a handoff (e.g. Deadline detail panel) with a real pre-filled query
   useEffect(() => {
     const q = searchParams.get('q');
     if (q) {
-      handleSend(q);
       setSearchParams({}, { replace: true });
+      handleSend(q).finally(() => setPendingPrompt(null));
     }
   }, []);
 
@@ -78,7 +82,7 @@ export function OperatorScreen() {
     // thread started.
     send(text, (history, onChunk) => {
       const built = buildFirmContext({
-        matters, deadlines, parties, conflictChecks,
+        matters, deadlines, parties, conflictChecks, documents,
         firm_jurisdiction: { country: firm?.country ?? null, region: firm?.region ?? null },
       }, CHAT_CONTEXT_BUDGET);
       return streamGeminiContent(operatorChatPrompt(text, history, built.text), onChunk, 'operator_chat');
@@ -125,7 +129,7 @@ export function OperatorScreen() {
 
         <div className="flex flex-col flex-1 min-h-0">
           <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 md:px-8 py-6 max-w-3xl mx-auto w-full">
-            {messages.length === 0 && !busy && (
+            {messages.length === 0 && !busy && !pendingPrompt && (
               <div className="space-y-2">
                 <p className="text-xs text-[var(--text-tertiary)] mb-3">
                   {conversation ? 'No messages in this conversation yet.' : 'Try asking:'}
@@ -142,6 +146,13 @@ export function OperatorScreen() {
               </div>
             )}
             <div className="space-y-4">
+              {messages.length === 0 && pendingPrompt && (
+                <div className="flex justify-end">
+                  <div className="max-w-[85%] rounded-lg px-4 py-2.5 text-sm bg-[var(--text-primary)] text-[var(--bg-primary)]">
+                    <ReactMarkdown>{pendingPrompt}</ReactMarkdown>
+                  </div>
+                </div>
+              )}
               {messages.map(m => (
                 <div key={m.id} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                   <div className={`max-w-[85%] rounded-lg px-4 py-2.5 text-sm ${m.role === 'user' ? 'bg-[var(--text-primary)] text-[var(--bg-primary)]' : 'bg-[var(--bg-secondary)] border border-[var(--border-subtle)]'}`}>
@@ -149,7 +160,7 @@ export function OperatorScreen() {
                   </div>
                 </div>
               ))}
-              {busy && (
+              {(busy || (pendingPrompt && messages.length === 0)) && (
                 <div className="flex justify-start">
                   <div className="max-w-[85%] rounded-lg px-4 py-2.5 text-sm bg-[var(--bg-secondary)] border border-[var(--border-subtle)]">
                     <ReactMarkdown>{streaming || '…'}</ReactMarkdown>

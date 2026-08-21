@@ -96,14 +96,16 @@ export function DeadlineDetailPanel({ deadline, onClose }: DeadlineDetailPanelPr
   };
 
   const handleOperatorHandoff = () => {
-    const statusStr = isCompleted
+    const daysText = isCompleted
       ? 'completed'
       : isOverdue
       ? `${Math.abs(days)} day${Math.abs(days) === 1 ? '' : 's'} overdue`
       : `${days} day${days === 1 ? '' : 's'} remaining`;
 
     const matterTitleStr = matter?.title || 'Unlinked Matter';
-    const prompt = `Help me prepare for "${deadline.title}" on matter "${matterTitleStr}" — due ${deadline.due_date}, currently ${statusStr}.`;
+    const formattedDueDate = formatDateOnly(deadline.due_date, locale, { month: 'short', day: 'numeric', year: 'numeric' });
+
+    const prompt = `I need to get moving on the "${deadline.title}" deadline for matter "${matterTitleStr}". It was due on ${formattedDueDate} (${daysText}). What documents do we have on file for this matter, and what's the best way to handle this deadline today?`;
 
     navigate(`/operator?q=${encodeURIComponent(prompt)}`);
   };
