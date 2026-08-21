@@ -1,20 +1,28 @@
-import { Outlet } from 'react-router-dom';
+import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { TopBar } from './TopBar';
 import { DemoBanner } from './DemoBanner';
-import { useEffect, useState } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
 import { ShortcutsModal } from './ShortcutsModal';
 
 export function AppShell() {
   const navigate = useNavigate();
   const location = useLocation();
+  const mainRef = useRef<HTMLElement>(null);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
+  // Reset scroll position to top on every route navigation (path or search)
+  useEffect(() => {
+    if (mainRef.current) {
+      mainRef.current.scrollTop = 0;
+    }
+    window.scrollTo(0, 0);
+  }, [location.pathname, location.search]);
+
   // Close the mobile drawer automatically on navigation, so tapping a link
   // doesn't leave the overlay sitting open behind the new screen.
-  useEffect(() => { setMobileNavOpen(false); }, [location.pathname]);
+  useEffect(() => { setMobileNavOpen(false); }, [location.pathname, location.search]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -51,7 +59,7 @@ export function AppShell() {
       <div className="flex flex-col flex-1 min-w-0">
         <DemoBanner />
         <TopBar onMenuClick={() => setMobileNavOpen(v => !v)} />
-        <main className="flex-1 overflow-y-auto">
+        <main ref={mainRef} className="flex-1 overflow-y-auto">
           <div className="max-w-[1440px] mx-auto px-4 md:px-8 py-6">
             <Outlet />
           </div>
