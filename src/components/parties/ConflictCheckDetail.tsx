@@ -121,23 +121,17 @@ Please review the conflict finding above and confirm whether formal clearance or
           <span>{submitting === 'operator' ? 'Routing…' : 'Ask Operator for help'}</span>
         </button>
         <button
-          onClick={() => setShowEmailModal(true)}
+          onClick={() => {
+            const prompt = `Draft an email regarding the flagged conflict check for "${check.searched_name}". Finding details: ${findingsText}. ${notes.trim() ? 'Reviewer notes: ' + notes.trim() : ''}`;
+            navigate(`/operator?q=${encodeURIComponent(prompt)}`);
+          }}
           disabled={submitting !== null}
           className="h-9 px-3 text-xs font-medium bg-[var(--bg-elevated)] border border-[var(--border-strong)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors rounded flex items-center justify-center gap-1.5"
         >
           <Mail className="w-3.5 h-3.5" />
-          <span>Draft email</span>
+          <span>Draft email with Operator</span>
         </button>
       </div>
-
-      {showEmailModal && (
-        <SendEmailModal
-          onClose={() => setShowEmailModal(false)}
-          defaultMatterId={check.matter_id ?? undefined}
-          defaultSubject={emailSubject}
-          defaultBody={emailBody}
-        />
-      )}
     </DetailSection>
   );
 }

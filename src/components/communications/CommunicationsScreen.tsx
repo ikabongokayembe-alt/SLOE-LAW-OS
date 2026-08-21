@@ -1,10 +1,10 @@
 import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useStore } from '../../lib/store';
-import { Mail, Plus } from 'lucide-react';
+import { Mail, Plus, Wrench } from 'lucide-react';
 import { SendEmailModal } from './SendEmailModal';
 import { CommunicationDetailPanel } from './CommunicationDetail';
-import { findStaleContacts, draftFollowUp } from '../../lib/riskSignals';
+import { findStaleContacts } from '../../lib/riskSignals';
 import { MatterCommunication } from '../../types';
 
 // Foundation of "client communication isn't captured anywhere" from the
@@ -14,13 +14,10 @@ import { MatterCommunication } from '../../types';
 // codebase to nest a tab into).
 export function CommunicationsScreen() {
   const { communications, matters, integrationConnections, parties } = useStore();
+  const navigate = useNavigate();
   const [matterFilter, setMatterFilter] = useState('all');
   const [showSend, setShowSend] = useState(false);
   const [draftFor, setDraftFor] = useState<{ matterId: string; subject: string; body: string } | null>(null);
-  // Rows truncate the body to two lines so the log stays scannable --
-  // opening one shows the actual full email, reusing the same DetailPanel
-  // pattern the rest of the app uses for "the row is inert but the real
-  // content is genuinely hidden."
   const [selectedComm, setSelectedComm] = useState<MatterCommunication | null>(null);
   const [replyFor, setReplyFor] = useState<{ matterId: string; to: string; subject: string } | null>(null);
 
@@ -53,6 +50,37 @@ export function CommunicationsScreen() {
           Gmail isn't connected for this firm — <Link to="/integrations" className="text-[var(--accent-secondary)] hover:underline">connect it from Integrations</Link> to send and log email from a matter.
         </div>
       )}
+
+      {(() => {
+        // Absence detection: an active matter with no logged contact for
+        // three weeks. Routed through the Operator agent with pre-filled context.
+        const stale = findStaleContacts(matters, communications).slice(0, 3);
+        if (stale.length === 0) return null;
+        return (
+          <div className="mb-4 space-y-2">
+            {stale.map(s2 => {
+              const m2 = s2.matter;
+              const client = parties.find(p => p.id === m2.client_party_id)?.name ?? null;
+              const prompt = `Draft a follow-up email for matter "${m2.title}" to ${client ?? 'the client'}. No client contact has been logged for ${s2.daysSilent} days.`;
+              return (
+                <div key={m2.id} className="flex flex-col sm:flex-row sm:items-center gap-2 bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg px-4 py-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium truncate">{m2.title}</div>
+                    <div className="text-xs text-[var(--text-tertiary)]">{s2.detail}</div>
+                  </div>
+                  <button
+                    onClick={() => navigate(`/operator?q=${encodeURIComponent(prompt)}`)}
+                    className="h-8 px-3 text-xs font-medium bg-[var(--text-primary)] text-[var(--bg-primary)] rounded shrink-0 flex items-center gap-1.5 hover:opacity-90 transition-opacity"
+                  >
+                    <Wrench className="w-3.5 h-3.5" />
+                    <span>Draft follow-up with Operator</span>
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
 
       <div className="flex flex-wrap items-end gap-3 mb-4">
         <div>
@@ -92,36 +120,6 @@ export function CommunicationsScreen() {
         </div>
       )}
 
-      {(() => {
-        // Absence detection: an active matter with no logged contact for
-        // three weeks. The draft is deterministic, not model-written --
-        // see draftFollowUp for why a generated check-in is the one place
-        // a model could quietly assert something about the matter.
-        const stale = findStaleContacts(matters, communications).slice(0, 3);
-        if (stale.length === 0) return null;
-        return (
-          <div className="mb-4 space-y-2">
-            {stale.map(s2 => {
-              const m2 = s2.matter;
-              const client = parties.find(p => p.id === m2.client_party_id)?.name ?? null;
-              return (
-                <div key={m2.id} className="flex flex-col sm:flex-row sm:items-center gap-2 bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg px-4 py-3">
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium truncate">{m2.title}</div>
-                    <div className="text-xs text-[var(--text-tertiary)]">{s2.detail}</div>
-                  </div>
-                  <button
-                    onClick={() => setDraftFor({ matterId: m2.id, ...draftFollowUp(m2.title, client, s2.daysSilent) })}
-                    className="h-8 px-3 text-xs font-medium bg-[var(--text-primary)] text-[var(--bg-primary)] rounded shrink-0"
-                  >
-                    Draft follow-up
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        );
-      })()}
       {showSend && <SendEmailModal onClose={() => setShowSend(false)} defaultMatterId={matterFilter !== 'all' ? matterFilter : undefined} />}
       {draftFor && <SendEmailModal onClose={() => setDraftFor(null)} defaultMatterId={draftFor.matterId} defaultSubject={draftFor.subject} defaultBody={draftFor.body} />}
       {replyFor && (
