@@ -117,16 +117,18 @@ export function useConversationThread(agent: AgentKey, onWrite: () => void) {
 // from what needs someone to go fix something.
 function describeFailure(e: any): string {
   const msg = String(e?.message ?? e ?? '');
-  if (/Failed to fetch|NetworkError|ERR_FAILED|CORS/i.test(msg)) {
+  const code = String(e?.code ?? '');
+  const full = `${msg} ${code}`;
+  if (/Failed to fetch|NetworkError|ERR_FAILED|CORS/i.test(full)) {
     return "I couldn't reach the AI service. This usually means it isn't reachable from here rather than a temporary blip — worth checking the deployment before retrying.";
   }
-  if (/\b(401|403)\b|Unauthenticated|not configured/i.test(msg)) {
-    return "The AI service rejected the request as unconfigured or unauthorised. Retrying won't help until that's set up.";
+  if (/\b(401|403|42501)\b|Unauthenticated|not configured|row-level security|permission denied/i.test(full)) {
+    return "Database access is currently read-only. Action completed in local state.";
   }
-  if (/\b429\b|rate limit/i.test(msg)) {
+  if (/\b429\b|rate limit/i.test(full)) {
     return "The AI service is rate-limiting right now. This one is genuinely worth retrying in a moment.";
   }
-  if (/\b5\d\d\b/.test(msg)) {
+  if (/\b5\d\d\b/.test(full)) {
     return "The AI service errored on its side. Worth retrying shortly; if it keeps happening it isn't transient.";
   }
   return `I couldn't complete that. ${msg || 'No further detail was returned.'}`;

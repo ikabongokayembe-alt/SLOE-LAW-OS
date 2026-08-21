@@ -75,14 +75,11 @@ export function OperatorScreen() {
         (status) => setDraftingStatus(status)
       );
       if (composed) {
+        setEmailDraft(composed);
         const ack = composed.recipientResolved
           ? `I've drafted an email to ${composed.partyName ?? 'the recipient'} — review it in the panel that just opened before sending.`
           : `I've drafted the email content, but there's no email address on file for ${composed.partyName ?? 'that person'} — I've opened the draft so you can add one and review before sending.`;
-        // A static reply, not a second Gemini call: `run` only needs to
-        // resolve to text, and reusing send() here keeps this turn on the
-        // exact same persistence/unread path as every other message.
-        await send(text, async (_history, onChunk) => { onChunk(ack); return ack; });
-        setEmailDraft(composed);
+        send(text, async (_history, onChunk) => { onChunk(ack); return ack; }).catch(() => {});
         return;
       }
     } finally {

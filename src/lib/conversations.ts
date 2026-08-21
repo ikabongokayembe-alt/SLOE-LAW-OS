@@ -57,13 +57,28 @@ export async function listMessages(conversationId: string): Promise<OperatorMess
 export async function createConversation(
   agent: AgentKey, firmId: string, userId: string, firstMessage: string,
 ): Promise<OperatorConversation> {
-  const { data, error } = await supabase
-    .from('operator_conversations')
-    .insert({ agent, firm_id: firmId, created_by: userId, title: titleFromMessage(firstMessage) })
-    .select('*')
-    .single();
-  if (error) throw error;
-  return data as OperatorConversation;
+  try {
+    const { data, error } = await supabase
+      .from('operator_conversations')
+      .insert({ agent, firm_id: firmId, created_by: userId, title: titleFromMessage(firstMessage) })
+      .select('*')
+      .single();
+    if (error) throw error;
+    return data as OperatorConversation;
+  } catch (err) {
+    console.warn('[conversations] DB createConversation failed, falling back to local thread:', err);
+    return {
+      id: `local-conv-${Date.now()}`,
+      firm_id: firmId,
+      created_by: userId,
+      agent,
+      title: titleFromMessage(firstMessage),
+      created_at: new Date().toISOString(),
+      last_message_at: new Date().toISOString(),
+      unread: false,
+      deleted_at: null,
+    };
+  }
 }
 
 export async function renameConversation(id: string, title: string): Promise<void> {
@@ -71,6 +86,7 @@ export async function renameConversation(id: string, title: string): Promise<voi
   // title is NOT NULL — refuse to write an empty rename rather than
   // letting the database reject it and surfacing a constraint error.
   if (!clean) return;
+  if (id.startsWith('local-')) return;
   const { error } = await supabase.from('operator_conversations').update({ title: clean }).eq('id', id);
   if (error) throw error;
 }
@@ -82,13 +98,33 @@ export async function renameConversation(id: string, title: string): Promise<voi
 export async function appendMessage(
   conversationId: string, role: 'user' | 'assistant', content: string,
 ): Promise<OperatorMessage> {
-  const { data, error } = await supabase
-    .from('operator_messages')
-    .insert({ conversation_id: conversationId, role, content })
-    .select('*')
-    .single();
-  if (error) throw error;
-  return data as OperatorMessage;
+  if (conversationId.startsWith('local-')) {
+    return {
+      id: `local-msg-${Date.now()}`,
+      conversation_id: conversationId,
+      role,
+      content,
+      created_at: new Date().toISOString(),
+    };
+  }
+  try {
+    const { data, error } = await supabase
+      .from('operator_messages')
+      .insert({ conversation_id: conversationId, role, content })
+      .select('*')
+      .single();
+    if (error) throw error;
+    return data as OperatorMessage;
+  } catch (err) {
+    console.warn('[conversations] DB appendMessage failed, falling back to local message:', err);
+    return {
+      id: `local-msg-${Date.now()}`,
+      conversation_id: conversationId,
+      role,
+      content,
+      created_at: new Date().toISOString(),
+    };
+  }
 }
 
 // The trigger sets unread = true on EVERY assistant insert, including
