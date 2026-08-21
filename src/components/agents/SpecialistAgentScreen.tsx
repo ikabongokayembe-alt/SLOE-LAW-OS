@@ -31,6 +31,7 @@ export function SpecialistAgentScreen() {
   const [inputValue, setInputValue] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [streamingContent, setStreamingContent] = useState('');
+  const [draftingStatus, setDraftingStatus] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -142,7 +143,7 @@ export function SpecialistAgentScreen() {
           </div>
           <div>
             <h2 className="text-sm font-medium">{specialist.name}</h2>
-            <p className="text-xs text-[var(--text-tertiary)]">{specialist.roleName}</p>
+            <p className="text-xs text-[var(--text-tertiary)]">{specialist.description}</p>
           </div>
         </div>
         <AiDisclaimer />
