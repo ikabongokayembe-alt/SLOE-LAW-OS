@@ -31,6 +31,7 @@
 
 import { Matter, Deadline, LawDocument, TimeEntry, MatterCommunication, ConflictCheck, Party } from '../types';
 import { findUnbilledMatters } from './riskSignals';
+import { daysUntilDateOnly, daysBetweenDateOnly, formatDateOnly } from './dates';
 
 // Ranked by the consequence a solo practitioner actually carries, not by
 // date proximity. A missed filing is career risk; a quiet client is
@@ -78,10 +79,10 @@ export interface ActionInputs {
 const DAY = 86400000;
 
 function daysBetween(iso: string, now: number): number {
-  return Math.round((now - new Date(iso).getTime()) / DAY);
+  return daysBetweenDateOnly(iso, now);
 }
 function daysUntil(iso: string, now: number): number {
-  return Math.round((new Date(iso).getTime() - now) / DAY);
+  return daysUntilDateOnly(iso, now);
 }
 function plural(n: number, one: string, many = one + 's'): string {
   return `${n} ${n === 1 ? one : many}`;
@@ -116,7 +117,7 @@ export function buildUrgentActions(input: ActionInputs, now = Date.now()): Urgen
       consequence: 'professional',
       score: CLASS_WEIGHT.professional + Math.min(overdueBy, 60) + (d.is_critical ? 30 : 0),
       title: `Address the missed ${d.title} on ${titleOf(d.matter_id)}`,
-      detail: `Due ${new Date(d.due_date).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })} — ${plural(overdueBy, 'day')} ago${d.is_critical ? ', flagged critical' : ''}.`,
+      detail: `Due ${formatDateOnly(d.due_date, 'en-US', { day: 'numeric', month: 'short', year: 'numeric' })} — ${plural(overdueBy, 'day')} ago${d.is_critical ? ', flagged critical' : ''}.`,
       reasoning: 'A missed filing date generally carries professional-responsibility exposure and often needs a curative filing rather than silence. The specific consequence depends on your jurisdiction and the court — this flag is a prompt to decide, not a rule.',
       grounding: 'general',
       ctaLabel: 'Open deadline',

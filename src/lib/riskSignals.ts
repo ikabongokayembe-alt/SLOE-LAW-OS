@@ -26,6 +26,7 @@
 // ─────────────────────────────────────────────────────────────────────
 
 import { Matter, Deadline, LawDocument, TimeEntry, AuditLogEntry, MatterStage, MatterCommunication } from '../types';
+import { daysUntilDateOnly } from './dates';
 
 const DAY = 86400000;
 
@@ -182,7 +183,7 @@ export function assessDeadlineRisk(
   now = Date.now(),
 ): DeadlineRisk {
   const reasons: string[] = [];
-  const daysLeft = Math.round((new Date(d.due_date).getTime() - now) / DAY);
+  const daysLeft = daysUntilDateOnly(d.due_date, now);
   const downstream = d.matter_id
     ? all.filter(x =>
         x.matter_id === d.matter_id && x.id !== d.id &&

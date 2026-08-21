@@ -28,3 +28,17 @@ export function parseDateOnly(dateOnlyString: string): Date {
 export function formatDateOnly(dateOnlyString: string, locale: string, options: Intl.DateTimeFormatOptions): string {
   return parseDateOnly(dateOnlyString).toLocaleDateString(locale, options);
 }
+
+// Calculates calendar days remaining until a date-only string ("YYYY-MM-DD") relative to target date (defaults to today local midnight).
+// Returns positive for future dates, negative for past (overdue) dates.
+export function daysUntilDateOnly(dateOnlyString: string, now: number | Date = Date.now()): number {
+  const target = typeof now === 'number' ? new Date(now) : now;
+  const targetMidnight = new Date(target.getFullYear(), target.getMonth(), target.getDate()).getTime();
+  const dueMidnight = parseDateOnly(dateOnlyString.slice(0, 10)).getTime();
+  return Math.round((dueMidnight - targetMidnight) / 86400000);
+}
+
+export function daysBetweenDateOnly(dateOnlyString: string, now: number | Date = Date.now()): number {
+  return -daysUntilDateOnly(dateOnlyString, now);
+}
+

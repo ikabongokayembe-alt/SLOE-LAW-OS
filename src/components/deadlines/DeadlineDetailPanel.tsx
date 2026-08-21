@@ -4,7 +4,7 @@ import { useStore } from '../../lib/store';
 import { useToast } from '../../lib/toast';
 import { DetailPanel } from '../shared/DetailPanel';
 import { assessDeadlineRisk } from '../../lib/riskSignals';
-import { formatDateOnly, parseDateOnly } from '../../lib/dates';
+import { formatDateOnly, parseDateOnly, daysUntilDateOnly } from '../../lib/dates';
 import { Deadline } from '../../types';
 import {
   AlertTriangle,
@@ -27,8 +27,7 @@ const TYPE_LABELS: Record<string, string> = {
 };
 
 function daysUntil(dateOnlyString: string): number {
-  const diff = parseDateOnly(dateOnlyString).getTime() - new Date().setHours(0, 0, 0, 0);
-  return Math.round(diff / 86400000);
+  return daysUntilDateOnly(dateOnlyString);
 }
 
 function safeFormatTimestamp(dateStr: string | null | undefined, locale: string): string {

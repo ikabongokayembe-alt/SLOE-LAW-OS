@@ -3,6 +3,7 @@ import { Bell, Menu } from 'lucide-react';
 import { CommandInput } from './CommandInput';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useStore } from '../../lib/store';
+import { daysUntilDateOnly } from '../../lib/dates';
 
 // Every route in routes.tsx needs an entry. The previous if-chain covered
 // seven of them and fell through to 'Law OS' for the rest, so Documents,
@@ -13,28 +14,24 @@ import { useStore } from '../../lib/store';
 // is exactly the failure mode a fall-through default produces: silent,
 // and worse the more the product grows.
 //
-// A map keyed by path, plus a prefix pass for the one nested route, so
-// adding a screen without adding a label is a visible omission rather
-// than a silent fallback to the product name.
+// Map explicitly. Anything unmapped falls through to 'Law OS'.
 const SCREEN_NAMES: Record<string, string> = {
   '/': 'Command Center',
   '/matters': 'Matters',
   '/deadlines': 'Deadlines',
-  '/parties': 'Conflict Check',
   '/documents': 'Documents',
-  '/time': 'Time',
-  '/communications': 'Communications',
-  '/history': 'History',
-  '/analyst': 'Analyst',
-  '/operator': 'Operator',
-  '/agents': 'Agent Library',
-  '/team': 'Team',
-  '/integrations': 'Integrations',
+  '/time': 'Time Entries',
+  '/parties': 'Parties & Conflicts',
+  '/communications': 'Communications Log',
+  '/strategic': 'Strategic Intelligence',
+  '/history': 'Audit Log',
+  '/team': 'Team Directory',
   '/settings': 'Firm Settings',
-  '/settings/import': 'Import',
+  '/agent-library': 'Specialist Agent Library',
+  '/operator': 'Operator',
 };
 
-const getScreenName = (pathname: string) => {
+const getScreenName = (pathname: string): string => {
   const exact = SCREEN_NAMES[pathname];
   if (exact) return exact;
   // /agents/:agentKey — the specialist chat screens.
@@ -43,7 +40,7 @@ const getScreenName = (pathname: string) => {
 };
 
 function daysUntil(dateStr: string): number {
-  return Math.round((new Date(dateStr).getTime() - new Date().setHours(0, 0, 0, 0)) / 86400000);
+  return daysUntilDateOnly(dateStr);
 }
 
 export function TopBar({ onMenuClick }: { onMenuClick?: () => void } = {}) {

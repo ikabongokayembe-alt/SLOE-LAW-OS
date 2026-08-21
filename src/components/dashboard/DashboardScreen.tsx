@@ -7,9 +7,10 @@ import { Link, useNavigate } from 'react-router-dom';
 import { Sparkles, ShieldAlert, Banknote, MessageCircle, Info, ArrowRight, ShieldCheck, EyeOff, Eye, AlertTriangle } from 'lucide-react';
 import { buildUrgentActions, UrgentAction, ConsequenceClass } from '../../lib/urgentActions';
 import { runBulkConflictChecks } from '../../lib/bulkConflictCheck';
+import { daysUntilDateOnly } from '../../lib/dates';
 
 function daysUntil(dateStr: string): number {
-  return Math.round((new Date(dateStr).getTime() - new Date().setHours(0, 0, 0, 0)) / 86400000);
+  return daysUntilDateOnly(dateStr);
 }
 
 interface StatCardProps {

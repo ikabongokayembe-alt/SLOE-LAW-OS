@@ -11,7 +11,7 @@ import { ConflictCheckDetailContent } from '../parties/ConflictCheckDetail';
 import { DocumentPreviewPanel } from '../documents/DocumentPreview';
 import { findBottlenecks, assessDeadlineRisk, findDocumentGaps } from '../../lib/riskSignals';
 import { buildUrgentActions } from '../../lib/urgentActions';
-import { formatDateOnly, parseDateOnly } from '../../lib/dates';
+import { formatDateOnly, parseDateOnly, daysUntilDateOnly } from '../../lib/dates';
 import { computeAmount, formatAmount, formatHours } from '../../lib/timeEntries';
 import { AlertTriangle, Clock, FileText, ShieldCheck, ShieldAlert, UserPlus, X, Receipt, Link2, CheckCircle2, CreditCard, Wrench } from 'lucide-react';
 
@@ -21,8 +21,7 @@ const ROLE_LABEL: Record<MatterPartyRole, string> = {
 };
 
 function daysUntil(dateOnlyString: string): number {
-  const diff = parseDateOnly(dateOnlyString).getTime() - new Date().setHours(0, 0, 0, 0);
-  return Math.round(diff / 86400000);
+  return daysUntilDateOnly(dateOnlyString);
 }
 
 // The Matter detail view -- opens on a kanban card click. Everything here

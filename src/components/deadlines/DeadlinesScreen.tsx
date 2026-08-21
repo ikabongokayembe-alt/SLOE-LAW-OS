@@ -4,7 +4,7 @@ import { useStore } from '../../lib/store';
 import { useToast } from '../../lib/toast';
 import { assessDeadlineRisk } from '../../lib/riskSignals';
 import { AlertTriangle, Clock, CheckCircle2, CalendarPlus, CalendarCheck2, ChevronLeft, ChevronRight, X, Eye } from 'lucide-react';
-import { formatDateOnly, parseDateOnly } from '../../lib/dates';
+import { formatDateOnly, parseDateOnly, daysUntilDateOnly } from '../../lib/dates';
 import { LogTimeModal } from '../time/LogTimeModal';
 import { DeadlineDetailPanel } from './DeadlineDetailPanel';
 import { Deadline } from '../../types';
@@ -16,8 +16,7 @@ const TYPE_LABELS: Record<string, string> = {
 const PAGE_SIZE = 25;
 
 function daysUntil(dateOnlyString: string): number {
-  const diff = parseDateOnly(dateOnlyString).getTime() - new Date().setHours(0, 0, 0, 0);
-  return Math.round(diff / 86400000);
+  return daysUntilDateOnly(dateOnlyString);
 }
 
 export function DeadlinesScreen() {
