@@ -4,7 +4,7 @@ import { useAuth } from '../../lib/auth';
 import { AgentLibraryTeaserCard } from './AgentLibraryTeaserCard';
 import { GroundingNotice } from '../shared/GroundingNotice';
 import { Link, useNavigate } from 'react-router-dom';
-import { Sparkles, ShieldAlert, Banknote, MessageCircle, Info, ArrowRight, ShieldCheck, EyeOff, Eye } from 'lucide-react';
+import { Sparkles, ShieldAlert, Banknote, MessageCircle, Info, ArrowRight, ShieldCheck, EyeOff, Eye, AlertTriangle } from 'lucide-react';
 import { buildUrgentActions, UrgentAction, ConsequenceClass } from '../../lib/urgentActions';
 import { runBulkConflictChecks } from '../../lib/bulkConflictCheck';
 
@@ -12,26 +12,26 @@ function daysUntil(dateStr: string): number {
   return Math.round((new Date(dateStr).getTime() - new Date().setHours(0, 0, 0, 0)) / 86400000);
 }
 
-// Counts are context, not the point of this screen, so they render as a
-// single quiet strip rather than four cards competing with the decisions
-// above them. The sparklines that used to sit here are gone deliberately:
-// they were drawn from different series than the numbers beside them, so
-// "Pending conflict checks 0" appeared above a rising line. A trend that
-// contradicts its own figure is worse than no trend.
-function StatStrip({ items }: { items: { label: string; value: number; to: string; alarming?: boolean }[] }) {
+interface StatCardProps {
+  label: string;
+  value: number;
+  to: string;
+  colorClass?: string;
+}
+
+function StatCard({ label, value, to, colorClass }: StatCardProps) {
   return (
-    <div className="flex flex-wrap items-center gap-x-6 gap-y-1.5">
-      {items.map(s => (
-        <Link key={s.label} to={s.to} className="group flex items-baseline gap-1.5 min-w-0">
-          <span className={`text-xs font-medium tabular-nums ${s.alarming && s.value > 0 ? 'text-[var(--signal-negative)]' : 'text-[var(--text-secondary)]'}`}>
-            {s.value}
-          </span>
-          <span className="text-[11px] text-[var(--text-tertiary)] group-hover:text-[var(--text-secondary)] transition-colors truncate">
-            {s.label}
-          </span>
-        </Link>
-      ))}
-    </div>
+    <Link
+      to={to}
+      className="group block bg-[var(--bg-secondary)] border border-[var(--border-subtle)] hover:border-[var(--border-strong)] rounded-lg p-3.5 transition-colors"
+    >
+      <div className="text-[11px] text-[var(--text-tertiary)] group-hover:text-[var(--text-secondary)] transition-colors truncate mb-1">
+        {label}
+      </div>
+      <div className={`text-2xl font-medium tracking-tight tabular-nums ${colorClass || 'text-[var(--text-primary)]'}`}>
+        {value}
+      </div>
+    </Link>
   );
 }
 
@@ -41,17 +41,10 @@ const CONSEQUENCE_META: Record<ConsequenceClass, { label: string; icon: any; col
   relationship: { label: 'Client',            icon: MessageCircle, color: 'var(--accent-secondary)' },
 };
 
-// buildUrgentActions() ids follow a stable "<kind>-<entityId>" convention
-// (overdue-<deadlineId>, unprepped-<deadlineId>, noconflict-<matterId>,
-// stale-<matterId>, unbilled-<matterId>) -- the kind prefix is what a
-// "same finding, different matter" bundle groups on. No new detection:
-// this is a pure display-layer regrouping of exactly what
-// buildUrgentActions already returned, so four matters missing a
-// conflict check read as one card instead of four near-identical ones.
 interface ActionBundle {
   kind: string;
   consequence: ConsequenceClass;
-  score: number; // highest-priority item's score, for ranking the bundle
+  score: number;
   items: UrgentAction[];
 }
 
@@ -71,9 +64,6 @@ function bundleActions(actions: UrgentAction[]): ActionBundle[] {
   return bundles.sort((a, b) => b.score - a.score);
 }
 
-// Plural framing per detector kind, used only when a bundle has 2+ items
-// -- a single-item bundle renders as a normal ActionCard using the
-// detector's own singular title instead.
 const BUNDLE_TITLE: Record<string, (n: number) => string> = {
   overdue: n => `${n} deadlines are overdue`,
   unprepped: n => `${n} deadlines have no recorded prep`,
@@ -82,23 +72,16 @@ const BUNDLE_TITLE: Record<string, (n: number) => string> = {
   unbilled: n => `${n} matters have unbilled time sitting`,
 };
 
-// "<kind>-<entityId>" -> entityId, matching buildUrgentActions' own id
-// convention exactly (see urgentActions.ts) rather than re-parsing title
-// strings, which are prose and not meant to be machine-readable.
 function entityIdOf(action: UrgentAction): string {
   return action.id.slice(action.id.indexOf('-') + 1);
 }
 
 function ActionCard({ action }: { action: UrgentAction }) {
   const meta = CONSEQUENCE_META[action.consequence];
-  const Icon = meta.icon;
   return (
     <Link
       to={action.href}
       className="group block bg-[var(--bg-secondary)] border border-[var(--border-subtle)] hover:border-[var(--border-strong)] rounded-lg p-4 transition-colors"
-      // The whole card is the target. The previous Urgent panel rendered
-      // its rows as plain divs styled like list items — they looked
-      // actionable and did nothing when clicked.
       style={{ borderLeftColor: meta.color, borderLeftWidth: 3 }}
     >
       <div className="text-sm font-medium mb-1">{action.title}</div>
@@ -107,10 +90,6 @@ function ActionCard({ action }: { action: UrgentAction }) {
       <div className="flex items-start gap-1.5 text-xs text-[var(--text-tertiary)]">
         {action.grounding === 'general' && <Info className="w-3 h-3 shrink-0 mt-0.5" />}
         <span>
-          {/* Anything not derived purely from stored values is labelled,
-              so a general risk framing is never mistaken for a verified
-              jurisdictional rule. Only the SOL engine's checked citations
-              are presented as settled. */}
           {action.grounding === 'general' && (
             <span className="text-[var(--text-secondary)] font-medium">General guidance — not jurisdiction-verified. </span>
           )}
@@ -126,11 +105,6 @@ function ActionCard({ action }: { action: UrgentAction }) {
   );
 }
 
-// Multiple matters/deadlines hitting the same detector -- one card, a
-// named list of what's affected, and (for the one kind that has a real
-// bulk action already built -- conflict checks) a "run all" button that
-// calls the exact same runBulkConflictChecks MattersScreen's kanban
-// multi-select uses, not a re-implementation of it.
 function BundledActionCard({
   bundle, names, onRunAll, running, progress,
 }: {
@@ -194,11 +168,6 @@ function BundledActionCard({
 export function DashboardScreen() {
   const { matters, deadlines, conflictChecks, documents, timeEntries, communications, parties, runConflictCheck, linkMatterConflictCheck } = useStore();
   const { profile, toggleMutedDashboardCategory } = useAuth();
-  // Command Center category mute/dismiss (product-audit fix: "features
-  // that can't be turned off" is a recurring complaint about legal
-  // practice tools). Per-user display preference only -- buildUrgentActions
-  // above still runs unfiltered over every matter/deadline for everyone,
-  // exactly as before; muting only affects what THIS profile renders below.
   const mutedCategories = profile?.muted_dashboard_categories ?? [];
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
@@ -212,10 +181,6 @@ export function DashboardScreen() {
 
   const bundles = useMemo(() => bundleActions(actions), [actions]);
 
-  // Grouped by consequence class -- same ranking order as before
-  // (professional, then revenue, then relationship), but now rendered as
-  // three visually distinct sections instead of one flat stack of
-  // same-styled cards.
   const sections = useMemo(() => {
     const order: ConsequenceClass[] = ['professional', 'revenue', 'relationship'];
     return order
@@ -223,11 +188,6 @@ export function DashboardScreen() {
       .filter(s => s.bundles.length > 0 && !mutedCategories.includes(s.consequence));
   }, [bundles, mutedCategories]);
 
-  // Sections that have real findings right now but are muted -- shown as
-  // small, easy-to-reverse chips (see JSX below) so muting is never a
-  // one-way door someone has to dig through settings to undo. A category
-  // with zero findings never appears here even if muted; nothing to
-  // restore visibility to.
   const mutedWithFindings = useMemo(() => {
     const order: ConsequenceClass[] = ['professional', 'revenue', 'relationship'];
     return order
@@ -235,10 +195,6 @@ export function DashboardScreen() {
       .filter(s => s.count > 0 && mutedCategories.includes(s.consequence));
   }, [bundles, mutedCategories]);
 
-  // Deadline-kind bundles (overdue/unprepped) key off a deadline id;
-  // matter-kind bundles (noconflict/stale/unbilled) key off a matter id.
-  // Resolving names here (not inside bundleActions) keeps the bundling
-  // function a pure regrouping step with no store lookups of its own.
   const namesFor = (bundle: ActionBundle): string[] => {
     const isDeadlineKind = bundle.kind === 'overdue' || bundle.kind === 'unprepped';
     return bundle.items.map(item => {
@@ -265,12 +221,7 @@ export function DashboardScreen() {
     const overdue = deadlines.filter(d => d.status === 'upcoming' && daysUntil(d.due_date) < 0).length;
     const critical = deadlines.filter(d => d.status === 'upcoming' && d.is_critical && daysUntil(d.due_date) <= 14).length;
     const pending = conflictChecks.filter(c => c.status === 'pending' || c.status === 'flagged').length;
-    return [
-      { label: 'active matters', value: active, to: '/matters' },
-      { label: 'critical in 14d', value: critical, to: '/deadlines' },
-      { label: 'overdue', value: overdue, to: '/deadlines', alarming: true },
-      { label: 'conflict checks open', value: pending, to: '/parties', alarming: true },
-    ];
+    return { active, critical, overdue, pending };
   }, [matters, deadlines, conflictChecks]);
 
   const handleAsk = () => {
@@ -280,11 +231,30 @@ export function DashboardScreen() {
 
   return (
     <div className="flex flex-col space-y-6 max-w-4xl">
-      {/* The decisions lead. Counts follow. Recent Matters is gone from
-          this screen on purpose: it duplicated the Matters board while
-          telling nobody anything they had to act on, and the actions
-          below already name the matters that need attention. Removing
-          noise, not substance — the full list is one click away. */}
+      {/* 1. Stat cards grid at top */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <StatCard label="Active Matters" value={stats.active} to="/matters" />
+        <StatCard
+          label="Critical in 14d"
+          value={stats.critical}
+          to="/deadlines"
+          colorClass={stats.critical > 0 ? 'text-[var(--signal-warning)]' : undefined}
+        />
+        <StatCard
+          label="Overdue Deadlines"
+          value={stats.overdue}
+          to="/deadlines"
+          colorClass={stats.overdue > 0 ? 'text-[var(--signal-negative)]' : undefined}
+        />
+        <StatCard
+          label="Open Conflict Checks"
+          value={stats.pending}
+          to="/parties"
+          colorClass={stats.pending > 0 ? 'text-[var(--signal-negative)]' : undefined}
+        />
+      </div>
+
+      {/* 2. Heading & Condensed Grounding Notice */}
       <div>
         <h2 className="text-xl font-semibold mb-1.5">What needs a decision</h2>
         <GroundingNotice />
@@ -306,11 +276,8 @@ export function DashboardScreen() {
         </div>
       )}
 
+      {/* 3. Section lists with icon & color treatment */}
       {sections.length === 0 ? (
-        // bundles is the FULL, unfiltered list -- if it's genuinely empty,
-        // say so. If it's non-empty but every section landed here muted,
-        // the chips row above already explains where everything went; a
-        // second "nothing needs a decision" message would be dishonest.
         bundles.length === 0 && (
           <div className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg p-6 text-sm text-[var(--text-secondary)]">
             <div className="flex items-center gap-2 text-[var(--signal-positive)] mb-1">
@@ -332,7 +299,9 @@ export function DashboardScreen() {
                 <div className="flex items-center gap-2 mb-3">
                   <Icon className="w-4 h-4 shrink-0" style={{ color: meta.color }} />
                   <h3 className="text-sm font-semibold" style={{ color: meta.color }}>{meta.label}</h3>
-                  <span className="text-xs text-[var(--text-tertiary)] bg-[var(--bg-tertiary)] rounded-full px-2 py-0.5">{count}</span>
+                  <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] text-[var(--text-secondary)]">
+                    {count}
+                  </span>
                   <div className="flex-1 h-px bg-[var(--border-subtle)]" />
                   <button
                     onClick={() => toggleMutedDashboardCategory(consequence)}
@@ -362,32 +331,26 @@ export function DashboardScreen() {
         </div>
       )}
 
-      {/* Everything below this line is background context, not a
-          decision -- deliberately demoted to plain rows behind a single
-          hairline divider instead of three separate bordered cards using
-          the exact same visual weight as the real finding cards above.
-          Command Center scored lowest on Clarity in the product audit
-          specifically because this zone used to compete with those cards
-          instead of receding behind them. */}
-      <div className="pt-5 border-t border-[var(--border-subtle)] space-y-4">
-        <StatStrip items={stats} />
+      {/* 4. Redesigned Agent Library Card & Relocated Ask the Analyst Input */}
+      <div className="pt-6 border-t border-[var(--border-subtle)] space-y-4">
+        {/* Redesigned Agent Library Card */}
+        <AgentLibraryTeaserCard />
 
+        {/* Ask the Analyst Input at bottom */}
         <button
           onClick={handleAsk}
-          className="w-full flex items-center gap-2.5 bg-[var(--bg-tertiary)] rounded-full h-9 px-4 text-left hover:bg-[var(--bg-elevated)] transition-colors"
+          className="w-full flex items-center gap-2.5 bg-[var(--bg-secondary)] border border-[var(--border-subtle)] hover:border-[var(--border-strong)] rounded-full h-10 px-4 text-left transition-colors"
         >
-          <Sparkles className="w-3.5 h-3.5 text-[var(--accent-secondary)] shrink-0" />
+          <Sparkles className="w-4 h-4 text-[var(--accent-secondary)] shrink-0" />
           <input
             value={query}
             onChange={e => setQuery(e.target.value)}
             onClick={e => e.stopPropagation()}
             onKeyDown={e => e.key === 'Enter' && handleAsk()}
             placeholder="Ask the Analyst something about your caseload…"
-            className="flex-1 bg-transparent text-xs focus:outline-none placeholder:italic"
+            className="flex-1 bg-transparent text-xs text-[var(--text-primary)] focus:outline-none placeholder:italic"
           />
         </button>
-
-        <AgentLibraryTeaserCard />
       </div>
     </div>
   );
