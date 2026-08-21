@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Matter, MatterPartyRole } from '../../types';
 import { useStore } from '../../lib/store';
 import { useAuth } from '../../lib/auth';
@@ -10,14 +11,19 @@ import { ConflictCheckDetailContent } from '../parties/ConflictCheckDetail';
 import { DocumentPreviewPanel } from '../documents/DocumentPreview';
 import { findBottlenecks, assessDeadlineRisk, findDocumentGaps } from '../../lib/riskSignals';
 import { buildUrgentActions } from '../../lib/urgentActions';
-import { formatDateOnly } from '../../lib/dates';
+import { formatDateOnly, parseDateOnly } from '../../lib/dates';
 import { computeAmount, formatAmount, formatHours } from '../../lib/timeEntries';
-import { AlertTriangle, Clock, FileText, ShieldCheck, ShieldAlert, UserPlus, X, Receipt, Link2, CheckCircle2, CreditCard } from 'lucide-react';
+import { AlertTriangle, Clock, FileText, ShieldCheck, ShieldAlert, UserPlus, X, Receipt, Link2, CheckCircle2, CreditCard, Wrench } from 'lucide-react';
 
 
 const ROLE_LABEL: Record<MatterPartyRole, string> = {
   client: 'Client', opposing: 'Opposing', witness: 'Witness', co_counsel: 'Co-counsel', other: 'Other',
 };
+
+function daysUntil(dateOnlyString: string): number {
+  const diff = parseDateOnly(dateOnlyString).getTime() - new Date().setHours(0, 0, 0, 0);
+  return Math.round(diff / 86400000);
+}
 
 // The Matter detail view -- opens on a kanban card click. Everything here
 // is scoped to this one matter. The "AI's own read" section is not a new
@@ -34,6 +40,7 @@ export function MatterDetailPanel({ matter, onClose }: { matter: Matter; onClose
   } = useStore();
   const { isDevMode } = useAuth();
   const { showToast } = useToast();
+  const navigate = useNavigate();
   const [markingPaidId, setMarkingPaidId] = useState<string | null>(null);
   const locale = firm?.locale || 'en-US';
 
@@ -123,6 +130,46 @@ export function MatterDetailPanel({ matter, onClose }: { matter: Matter; onClose
     setMarkingPaidId(null);
   };
 
+  const handleOperatorHandoff = () => {
+    let prompt = '';
+
+    // Priority 1: Real, current "AT RISK" or urgent intelligence finding
+    const overdueDeadline = matterDeadlines.find(d => d.status === 'upcoming' && daysUntil(d.due_date) < 0);
+    const atRiskDeadlineObj = deadlineRisks.find(x => x.risk.level === 'at_risk') ||
+      deadlineRisks.find(x => x.risk.level === 'watch');
+    const targetDeadline = overdueDeadline || atRiskDeadlineObj?.deadline;
+
+    if (targetDeadline) {
+      const days = daysUntil(targetDeadline.due_date);
+      const isOverdue = days < 0;
+      const formattedDueDate = formatDateOnly(targetDeadline.due_date, locale, { month: 'short', day: 'numeric', year: 'numeric' });
+      const daysText = isOverdue
+        ? `overdue by ${Math.abs(days)} day${Math.abs(days) === 1 ? '' : 's'}`
+        : `${days} day${days === 1 ? '' : 's'} remaining`;
+
+      prompt = `I need to get moving on the "${targetDeadline.title}" deadline for matter "${matter.title}". It was due on ${formattedDueDate} (${daysText}). What documents do we have on file for this matter, and what's the best way to handle this deadline today?`;
+    } else if (urgentActions.length > 0) {
+      const topAction = urgentActions[0];
+      prompt = `I need to address an urgent finding on matter "${matter.title}"${clientParty ? ` (${clientParty.name})` : ''}: ${topAction.title}. ${topAction.detail} What documents do we have on file, and what are the best next steps to handle this today?`;
+    } else if (bottleneck) {
+      prompt = `Matter "${matter.title}"${clientParty ? ` (${clientParty.name})` : ''} appears to be stalled: ${bottleneck.detail}. What's blocking progress, and how can we get this matter moving today?`;
+    } else if (documentGap) {
+      prompt = `We have a document gap on matter "${matter.title}"${clientParty ? ` (${clientParty.name})` : ''}: ${documentGap.detail}. What documents are missing, and how should we proceed today?`;
+    }
+    // Priority 2: Conflict check flagged
+    else if (conflictCheck && conflictCheck.status === 'flagged') {
+      prompt = `The conflict check for matter "${matter.title}"${clientParty ? ` (${clientParty.name})` : ''} is currently flagged. Can you review the conflict findings and help me analyze whether this can be cleared or waived today?`;
+    }
+    // Priority 3: Fallback general prompt
+    else {
+      const clientStr = clientParty ? ` for ${clientParty.name}` : '';
+      const practiceStr = practiceArea ? ` (${practiceArea.label})` : '';
+      prompt = `I'm working on the matter "${matter.title}"${clientStr}${practiceStr}. Can you give me an overview of the matter status, key documents, and upcoming actions needed today?`;
+    }
+
+    navigate(`/operator?q=${encodeURIComponent(prompt)}`);
+  };
+
   const previewDoc = previewDocId ? matterDocuments.find(d => d.id === previewDocId) ?? null : null;
 
   return (
@@ -132,6 +179,33 @@ export function MatterDetailPanel({ matter, onClose }: { matter: Matter; onClose
         subtitle={`${stage?.label ?? 'Unknown stage'} · ${matter.status.replace('_', ' ')}`}
         onClose={onClose}
       >
+        <div className="space-y-6">
+          {/* Operator Action Banner */}
+          <div className="bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded-lg p-4 space-y-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-start gap-2.5">
+                <div className="p-2 bg-[var(--accent-primary)]/10 text-[var(--accent-primary)] border border-[var(--accent-primary)]/20 rounded-lg shrink-0 mt-0.5">
+                  <Wrench className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-medium text-[var(--text-primary)]">Need assistance with this matter?</h3>
+                  <p className="text-xs text-[var(--text-secondary)] mt-0.5">
+                    Start a grounded Operator session with pre-filled matter details &amp; prep context.
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 gap-2">
+              <button
+                onClick={handleOperatorHandoff}
+                className="w-full h-8 bg-[var(--text-primary)] text-[var(--bg-primary)] hover:opacity-90 transition-opacity rounded text-xs font-medium flex items-center justify-center gap-1.5"
+              >
+                <Wrench className="w-3.5 h-3.5" />
+                <span>Get help from Operator</span>
+              </button>
+            </div>
+          </div>
+        
         <DetailSection title="Overview">
           <div className="grid grid-cols-2 gap-3 text-sm">
             <div><div className="text-[10px] text-[var(--text-tertiary)] uppercase tracking-wider">Client</div><div className="truncate">{clientParty?.name ?? '—'}</div></div>
@@ -365,6 +439,7 @@ export function MatterDetailPanel({ matter, onClose }: { matter: Matter; onClose
             </>
           )}
         </DetailSection>
+        </div>
       </DetailPanel>
 
       {previewDoc && (
