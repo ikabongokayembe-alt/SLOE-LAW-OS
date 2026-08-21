@@ -31,6 +31,24 @@ function daysUntil(dateOnlyString: string): number {
   return Math.round(diff / 86400000);
 }
 
+function safeFormatTimestamp(dateStr: string | null | undefined, locale: string): string {
+  if (!dateStr) return '—';
+  try {
+    const normalized = dateStr.includes(' ') ? dateStr.replace(' ', 'T') : dateStr;
+    const d = new Date(normalized);
+    if (!isNaN(d.getTime())) {
+      return d.toLocaleDateString(locale, { day: 'numeric', month: 'short', year: 'numeric' });
+    }
+    const dateOnly = parseDateOnly(dateStr.slice(0, 10));
+    if (!isNaN(dateOnly.getTime())) {
+      return dateOnly.toLocaleDateString(locale, { day: 'numeric', month: 'short', year: 'numeric' });
+    }
+  } catch {
+    // ignore
+  }
+  return '—';
+}
+
 interface DeadlineDetailPanelProps {
   deadline: Deadline;
   onClose: () => void;
@@ -218,7 +236,7 @@ export function DeadlineDetailPanel({ deadline, onClose }: DeadlineDetailPanelPr
                       <span className="font-medium text-[var(--text-primary)] truncate">{doc.file_name}</span>
                     </div>
                     <span className="text-[10px] text-[var(--text-tertiary)] font-mono shrink-0">
-                      {new Date(doc.created_at).toLocaleDateString(locale, { day: 'numeric', month: 'short', year: 'numeric' })}
+                      {safeFormatTimestamp(doc.created_at, locale)}
                     </span>
                   </div>
                 ))}

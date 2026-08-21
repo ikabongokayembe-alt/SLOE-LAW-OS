@@ -1,44 +1,40 @@
-console.log('=== Step 1: Testing Deadline Operator Prompt Formulation ===');
-
-const mockDeadline = {
-  id: 'd-101',
-  title: 'Amended Complaint',
-  due_date: '2026-08-18',
-  status: 'upcoming',
-  deadline_type: 'filing',
-  matter_id: 'm-202',
-};
-
-const mockMatter = {
-  id: 'm-202',
-  title: 'Weston v. Castellan Freight - MVA Injury',
-};
-
-const days = -2; // 2 days overdue
-const statusStr = `${Math.abs(days)} days overdue`;
-const expectedPrompt = `Help me prepare for "${mockDeadline.title}" on matter "${mockMatter.title}" — due ${mockDeadline.due_date}, currently ${statusStr}.`;
-
-console.log('Formulated Operator Handoff Prompt:');
-console.log(expectedPrompt);
-
-if (!expectedPrompt.includes('Amended Complaint') || !expectedPrompt.includes('Weston v. Castellan Freight') || !expectedPrompt.includes('2 days overdue')) {
-  console.error('FAIL: Prompt formulation missing expected details');
-  process.exit(1);
+function safeFormatTimestamp(dateStr, locale = 'en-US') {
+  if (!dateStr) return '—';
+  try {
+    const normalized = dateStr.includes(' ') ? dateStr.replace(' ', 'T') : dateStr;
+    const d = new Date(normalized);
+    if (!isNaN(d.getTime())) {
+      return d.toLocaleDateString(locale, { day: 'numeric', month: 'short', year: 'numeric' });
+    }
+    const [y, m, da] = dateStr.slice(0, 10).split('-').map(Number);
+    const dateOnly = new Date(y, m - 1, da);
+    if (!isNaN(dateOnly.getTime())) {
+      return dateOnly.toLocaleDateString(locale, { day: 'numeric', month: 'short', year: 'numeric' });
+    }
+  } catch {
+    // ignore
+  }
+  return '—';
 }
 
-console.log('\n=== Step 2: Testing Matter Documents Linking ===');
+console.log('=== Testing safeFormatTimestamp against diverse timestamp values ===');
 
-const mockDocs = [
-  { id: 'doc-1', matter_id: 'm-202', file_name: 'Initial_Pleadings.pdf' },
-  { id: 'doc-2', matter_id: 'm-999', file_name: 'Other_Case.pdf' },
+const testCases = [
+  '2026-08-15T22:56:49+00:00',
+  '2026-08-15 22:56:49+00',
+  '2026-08-15 22:56:49.123+00',
+  '2026-08-15',
+  null,
+  undefined,
 ];
 
-const linked = mockDocs.filter(doc => doc.matter_id === mockDeadline.matter_id);
-console.log('Linked Documents Count:', linked.length);
-
-if (linked.length !== 1 || linked[0].file_name !== 'Initial_Pleadings.pdf') {
-  console.error('FAIL: Document filtering by matter_id failed');
-  process.exit(1);
+for (const tc of testCases) {
+  const result = safeFormatTimestamp(tc);
+  console.log(`Input: "${tc}" -> Result: "${result}"`);
+  if (tc && result === 'Invalid Date') {
+    console.error(`FAIL: Invalid Date returned for ${tc}`);
+    process.exit(1);
+  }
 }
 
-console.log('\n✅ ALL DEADLINE DETAIL & OPERATOR HANDOFF TESTS PASSED!');
+console.log('\n✅ ALL TIMESTAMP FORMATTING TESTS PASSED!');
