@@ -63,6 +63,7 @@ interface StoreActions {
   addParty: (party: Omit<Party, 'id'>) => Promise<Party | null>;
   runConflictCheck: (searchedName: string, matterId: string | null) => Promise<ConflictCheck | null>;
   clearConflictCheck: (id: string, waived: boolean, notes?: string) => Promise<void>;
+  flagConflictForOperator: (id: string, notes?: string) => Promise<void>;
   addMatter: (matter: Omit<Matter, 'id'>) => Promise<Matter | null>;
   addMatterParty: (matterId: string, partyId: string, role: MatterPartyRole) => Promise<{ error?: string }>;
   removeMatterParty: (matterId: string, partyId: string, role: MatterPartyRole) => Promise<void>;
@@ -455,6 +456,20 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     const { error } = await supabase.from('conflict_checks').update(patch).eq('id', id);
     if (error) { console.error('[store] clearConflictCheck failed:', error); showToast('error', "Couldn't save — try again."); }
     else showToast('success', waived ? 'Conflict waived on record.' : 'Conflict check cleared.');
+  }, [profile?.id]);
+
+  const flagConflictForOperator = useCallback(async (id: string, notes?: string) => {
+    const patch = {
+      status: 'pending_review' as const,
+      cleared_at: new Date().toISOString(),
+      cleared_by: profile?.id ?? null,
+      notes: notes?.trim() ? `[Pending Operator Review] ${notes.trim()}` : '[Pending Operator Review] Help requested by attorney',
+    };
+    setState(s => ({ ...s, conflictChecks: s.conflictChecks.map(c => c.id === id ? { ...c, ...patch } : c) }));
+    if (!isSupabaseConfigured) return;
+    const { error } = await supabase.from('conflict_checks').update(patch).eq('id', id);
+    if (error) { console.error('[store] flagConflictForOperator failed:', error); showToast('error', "Couldn't update flag — try again."); }
+    else showToast('success', 'Routed conflict check flag to Operator for review.');
   }, [profile?.id]);
 
   const addMatter = useCallback(async (matter: Omit<Matter, 'id'>) => {
@@ -1139,7 +1154,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   return (
     <StoreContext.Provider value={{
       ...state,
-      refresh, updateFirm, regenerateIntakeToken, markInvoicePaid, addPracticeArea, updatePracticeArea, addParty, runConflictCheck, clearConflictCheck, addMatter, addMatterParty, removeMatterParty, updateMatterStage, updateMatterAttorney, linkMatterConflictCheck, addDeadline, updateDeadline, addInsights, uploadDocument, deleteDocument, requestAgent, removeAgentRequest, commitImportBatch, removeImportBatch, addTimeEntry, updateTimeEntry, deleteTimeEntry, generateInvoice, refreshIntegrations, pushDeadlineToCalendar, sendMatterCommunication, inviteClientToPortal, setDocumentClientVisible, sendForSignature, refreshSignatureStatus, cancelSignatureRequest,
+      refresh, updateFirm, regenerateIntakeToken, markInvoicePaid, addPracticeArea, updatePracticeArea, addParty, runConflictCheck, clearConflictCheck, flagConflictForOperator, addMatter, addMatterParty, removeMatterParty, updateMatterStage, updateMatterAttorney, linkMatterConflictCheck, addDeadline, updateDeadline, addInsights, uploadDocument, deleteDocument, requestAgent, removeAgentRequest, commitImportBatch, removeImportBatch, addTimeEntry, updateTimeEntry, deleteTimeEntry, generateInvoice, refreshIntegrations, pushDeadlineToCalendar, sendMatterCommunication, inviteClientToPortal, setDocumentClientVisible, sendForSignature, refreshSignatureStatus, cancelSignatureRequest,
     }}>
       {children}
     </StoreContext.Provider>

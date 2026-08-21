@@ -1,20 +1,20 @@
 import { useState } from 'react';
-import { AlertTriangle, CheckCircle2, Clock, ShieldOff, GitBranch, Link2, Info } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { AlertTriangle, CheckCircle2, Clock, ShieldOff, GitBranch, Link2, Info, Wrench, Mail } from 'lucide-react';
 import { ConflictCheck, Party, Matter, MatterParty, PartyRelationship } from '../../types';
 import { ConflictSignal, analyseConflict } from '../../lib/conflictSignals';
 import { DetailPanel, DetailSection } from '../shared/DetailPanel';
 import { useStore } from '../../lib/store';
+import { SendEmailModal } from '../communications/SendEmailModal';
 
 const STATUS_STYLE: Record<ConflictCheck['status'], { icon: typeof CheckCircle2; className: string; label: string }> = {
   flagged: { icon: AlertTriangle, className: 'text-[var(--signal-warning)] bg-[var(--signal-warning)]/10 border-[var(--signal-warning)]/30', label: 'Flagged' },
+  pending_review: { icon: Clock, className: 'text-[var(--signal-info)] bg-[var(--signal-info)]/10 border-[var(--signal-info)]/30', label: 'Pending Operator Review' },
   cleared: { icon: CheckCircle2, className: 'text-[var(--signal-positive)] bg-[var(--signal-positive)]/10 border-[var(--signal-positive)]/30', label: 'Cleared' },
   waived: { icon: ShieldOff, className: 'text-[var(--signal-positive)] bg-[var(--signal-positive)]/10 border-[var(--signal-positive)]/30', label: 'Waived' },
   pending: { icon: Clock, className: 'text-[var(--text-tertiary)] bg-[var(--bg-tertiary)] border-[var(--border-subtle)]', label: 'Pending' },
 };
 
-// The findings list markup, shared between a check's own frozen `signals`
-// and a live recompute of the same shape for legacy records (see below) --
-// one rendering path, so the two cases can never drift apart visually.
 function FindingsList({ signals }: { signals: ConflictSignal[] }) {
   return (
     <div className="space-y-1.5">
@@ -38,19 +38,16 @@ function FindingsList({ signals }: { signals: ConflictSignal[] }) {
   );
 }
 
-// The gate-clearing action for a flagged check. Deliberately not a single
-// click: this is what unlocks a matter past enforce_conflict_check_gate(),
-// so both paths require typed reasoning and an explicit confirm(), and
-// neither button is a system verdict -- "Clear" records the human's read
-// that there's no real conflict here (e.g. a benign self-match), "Waive"
-// records that a real conflict exists and the firm is proceeding anyway.
-// Two distinct statuses (not one collapsed meaning) because they read
-// differently to a principal auditing the trail later: cleared says
-// "nothing here", waived says "something here, deliberate call made".
 function ReviewFlaggedCheck({ check }: { check: ConflictCheck }) {
-  const { clearConflictCheck } = useStore();
+  const { clearConflictCheck, flagConflictForOperator } = useStore();
+  const navigate = useNavigate();
   const [notes, setNotes] = useState('');
-  const [submitting, setSubmitting] = useState<'clear' | 'waive' | null>(null);
+  const [submitting, setSubmitting] = useState<'clear' | 'waive' | 'operator' | null>(null);
+  const [showEmailModal, setShowEmailModal] = useState(false);
+
+  const findingsText = check.signals && check.signals.length > 0
+    ? check.signals.map(s => `${s.path} (${s.facts.join('; ')})`).join(' | ')
+    : `Potential match on searched name "${check.searched_name}"`;
 
   const act = async (waive: boolean) => {
     const trimmed = notes.trim();
@@ -66,43 +63,85 @@ function ReviewFlaggedCheck({ check }: { check: ConflictCheck }) {
     setSubmitting(null);
   };
 
+  const handleAskOperator = async () => {
+    setSubmitting('operator');
+    await flagConflictForOperator(check.id, notes);
+    setSubmitting(null);
+    const prompt = `I need help evaluating a flagged conflict check for "${check.searched_name}". Finding details: ${findingsText}. ${notes.trim() ? 'Reviewer notes: ' + notes.trim() : 'No initial notes provided.'} How should our firm evaluate or manage this conflict?`;
+    navigate(`/operator?q=${encodeURIComponent(prompt)}`);
+  };
+
+  const emailSubject = `Conflict Check Review: ${check.searched_name}`;
+  const emailBody = `Conflict Check Finding Summary:
+- Searched Name: ${check.searched_name}
+- Findings: ${findingsText}
+${notes.trim() ? '- Reviewer Notes: ' + notes.trim() : ''}
+
+Please review the conflict finding above and confirm whether formal clearance or a conflict waiver is required.`;
+
   return (
     <DetailSection title="Review this flag">
       <p className="text-[11px] text-[var(--text-tertiary)] mb-2">
-        This is your call to make, not the system's -- clearing or waiving records your professional judgment on the connection found above. Required before this matter can leave Intake.
+        This is your call to make, not the system's -- clearing or waiving records your professional judgment. Required before this matter can leave Intake.
       </p>
-      <label className="text-[10px] uppercase font-mono tracking-wider text-[var(--text-tertiary)] block mb-1">Reasoning (required)</label>
+      <label className="text-[10px] uppercase font-mono tracking-wider text-[var(--text-tertiary)] block mb-1">
+        Reasoning / Notes (required for Clear/Waive; optional for Operator/Email)
+      </label>
       <textarea
         value={notes}
         onChange={e => setNotes(e.target.value)}
         placeholder="Why this isn't a real conflict, or how it's being managed…"
         rows={2}
-        className="w-full px-3 py-2 bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded text-sm focus:outline-none resize-none mb-2"
+        className="w-full px-3 py-2 bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded text-sm focus:outline-none resize-none mb-3"
       />
-      <div className="flex gap-2">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-2">
         <button
           onClick={() => act(false)}
           disabled={!notes.trim() || submitting !== null}
-          className="flex-1 h-9 text-sm font-medium bg-[var(--signal-positive)]/10 text-[var(--signal-positive)] border border-[var(--signal-positive)]/30 rounded hover:opacity-90 transition-opacity disabled:opacity-40"
+          className="h-9 px-3 text-xs font-medium bg-[var(--signal-positive)]/10 text-[var(--signal-positive)] border border-[var(--signal-positive)]/30 rounded hover:opacity-90 transition-opacity disabled:opacity-40"
         >
           {submitting === 'clear' ? 'Clearing…' : 'Clear — no real conflict'}
         </button>
         <button
           onClick={() => act(true)}
           disabled={!notes.trim() || submitting !== null}
-          className="flex-1 h-9 text-sm font-medium bg-[var(--bg-tertiary)] text-[var(--text-primary)] border border-[var(--border-subtle)] rounded hover:opacity-90 transition-opacity disabled:opacity-40"
+          className="h-9 px-3 text-xs font-medium bg-[var(--bg-tertiary)] text-[var(--text-primary)] border border-[var(--border-subtle)] rounded hover:opacity-90 transition-opacity disabled:opacity-40"
         >
           {submitting === 'waive' ? 'Waiving…' : 'Waive — proceed anyway'}
         </button>
       </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 border-t border-[var(--border-subtle)]">
+        <button
+          onClick={handleAskOperator}
+          disabled={submitting !== null}
+          className="h-9 px-3 text-xs font-medium bg-[var(--text-primary)] text-[var(--bg-primary)] rounded hover:opacity-90 transition-opacity flex items-center justify-center gap-1.5"
+        >
+          <Wrench className="w-3.5 h-3.5" />
+          <span>{submitting === 'operator' ? 'Routing…' : 'Ask Operator for help'}</span>
+        </button>
+        <button
+          onClick={() => setShowEmailModal(true)}
+          disabled={submitting !== null}
+          className="h-9 px-3 text-xs font-medium bg-[var(--bg-elevated)] border border-[var(--border-strong)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors rounded flex items-center justify-center gap-1.5"
+        >
+          <Mail className="w-3.5 h-3.5" />
+          <span>Draft email</span>
+        </button>
+      </div>
+
+      {showEmailModal && (
+        <SendEmailModal
+          onClose={() => setShowEmailModal(false)}
+          defaultMatterId={check.matter_id ?? undefined}
+          defaultSubject={emailSubject}
+          defaultBody={emailBody}
+        />
+      )}
     </DetailSection>
   );
 }
 
-// The rich result itself, content-only -- reused unmodified whether it is
-// rendered seconds after a live search (PartiesScreen) or reopened later
-// from Recent Checks / a matter's conflict-check section. Renders from the
-// check's own stored `signals` (analyseConflict()'s output, frozen at
 // check time -- see migration 0023), never recomputed against current
 // data for records that actually HAVE frozen signals, so a past check
 // with real reasoning always shows the finding as it actually was.
