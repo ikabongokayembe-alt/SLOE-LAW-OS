@@ -110,6 +110,12 @@ export function DeadlineDetailPanel({ deadline, onClose }: DeadlineDetailPanelPr
     navigate(`/operator?q=${encodeURIComponent(prompt)}`);
   };
 
+  const handleEmailHandoff = () => {
+    const matterTitleStr = matter?.title || 'Unlinked Matter';
+    const prompt = `Draft an email to the client regarding the "${deadline.title}" deadline for matter "${matterTitleStr}".`;
+    navigate(`/operator?q=${encodeURIComponent(prompt)}`);
+  };
+
   return (
     <>
       <DetailPanel
@@ -133,13 +139,21 @@ export function DeadlineDetailPanel({ deadline, onClose }: DeadlineDetailPanelPr
                 </div>
               </div>
             </div>
-            <button
-              onClick={handleOperatorHandoff}
-              className="w-full h-8 bg-[var(--text-primary)] text-[var(--bg-primary)] hover:opacity-90 transition-opacity rounded text-xs font-medium flex items-center justify-center gap-1.5"
-            >
-              <Wrench className="w-3.5 h-3.5" />
-              <span>Get help from Operator</span>
-            </button>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <button
+                onClick={handleOperatorHandoff}
+                className="w-full h-8 bg-[var(--text-primary)] text-[var(--bg-primary)] hover:opacity-90 transition-opacity rounded text-xs font-medium flex items-center justify-center gap-1.5"
+              >
+                <Wrench className="w-3.5 h-3.5" />
+                <span>Get help from Operator</span>
+              </button>
+              <button
+                onClick={handleEmailHandoff}
+                className="w-full h-8 bg-[var(--bg-elevated)] border border-[var(--border-strong)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors rounded text-xs font-medium flex items-center justify-center gap-1.5"
+              >
+                <span>Draft update email</span>
+              </button>
+            </div>
           </div>
 
           {/* Status & Urgency */}

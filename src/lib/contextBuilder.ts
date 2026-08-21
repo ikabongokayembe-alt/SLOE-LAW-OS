@@ -112,6 +112,26 @@ function summarizeDeadlines(deadlines: Json[]) {
   };
 }
 
+function summarizeDocuments(documents: Json[], matters: Json[]) {
+  const matterTitleMap: Record<string, string> = {};
+  if (Array.isArray(matters)) {
+    for (const m of matters) {
+      if (m?.id && m?.title) matterTitleMap[m.id] = m.title;
+    }
+  }
+  const byMatter: Record<string, string[]> = {};
+  if (Array.isArray(documents)) {
+    for (const doc of documents) {
+      if (doc?.file_name) {
+        const mTitle = matterTitleMap[doc.matter_id] || doc.matter_id || 'unlinked';
+        if (!byMatter[mTitle]) byMatter[mTitle] = [];
+        byMatter[mTitle].push(doc.file_name);
+      }
+    }
+  }
+  return { total: documents.length, by_matter: byMatter };
+}
+
 const SECTION_LABEL: Record<string, string> = {
   matters: 'MATTERS', deadlines: 'DEADLINES', parties: 'PARTIES', conflictChecks: 'CONFLICT CHECKS',
   documents: 'DOCUMENTS', practiceAreas: 'PRACTICE AREAS',
@@ -125,15 +145,9 @@ export interface ContextUsage {
 export interface ContextBuildResult {
   text: string;
   truncated: boolean;
-  // Per array-field usage (e.g. { matters: {included: 5, total: 62}, ... }) —
-  // only keys actually present in the input context appear here.
   usage: Record<string, ContextUsage>;
 }
 
-// `context` mixes array fields (matters/deadlines/parties/...), which get
-// the summarize+prioritize+budget treatment, with small scalar/object
-// fields (e.g. firm_jurisdiction), which are always included verbatim in
-// the summary since they're tiny and not the source of the problem.
 export function buildFirmContext(context: Record<string, Json>, totalBudgetChars: number): ContextBuildResult {
   const arrayKeys = Object.keys(context).filter(k => Array.isArray(context[k]));
   const scalarKeys = Object.keys(context).filter(k => !Array.isArray(context[k]));
@@ -142,8 +156,9 @@ export function buildFirmContext(context: Record<string, Json>, totalBudgetChars
   for (const k of scalarKeys) summary[k] = context[k];
   if (arrayKeys.includes('matters')) summary.matters_summary = summarizeMatters(context.matters);
   if (arrayKeys.includes('deadlines')) summary.deadlines_summary = summarizeDeadlines(context.deadlines);
+  if (arrayKeys.includes('documents')) summary.documents_summary = summarizeDocuments(context.documents, context.matters);
   for (const k of arrayKeys) {
-    if (k === 'matters' || k === 'deadlines') continue;
+    if (k === 'matters' || k === 'deadlines' || k === 'documents') continue;
     summary[`${k}_total`] = (context[k] as Json[]).length;
   }
   const summaryText = JSON.stringify(summary);

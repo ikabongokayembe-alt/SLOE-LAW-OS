@@ -82,6 +82,10 @@ export function resolveRecipientEmail(
 }
 
 async function classifyIsEmailRequest(message: string): Promise<boolean> {
+  // Fast regex pre-filter — if message clearly doesn't ask to draft/write an email, save 3-4s latency overhead
+  if (!/\b(email|draft an email|write an email|compose an email|send an email|outreach|client update)\b/i.test(message)) {
+    return false;
+  }
   try {
     const out = await callGemini(emailIntentClassifyPrompt(message), false, 'email_draft_classify');
     return /^\s*yes\b/i.test(String(out));
