@@ -64,14 +64,17 @@ export function useConversationThread(agent: AgentKey, onWrite: () => void) {
     run: (history: { role: 'user' | 'assistant'; content: string }[], onChunk: (s: string) => void) => Promise<string>,
   ) => {
     const body = text.trim();
-    if (!body || busy || !profile) return;
+    if (!body || busy) return;
     setBusy(true);
     setStreaming('');
+
+    const firmId = profile?.firm_id ?? '00000000-0000-0000-0000-000000000000';
+    const userId = profile?.id ?? '00000000-0000-0000-0000-000000000000';
 
     let conv = conversation;
     try {
       if (!conv) {
-        conv = await createConversation(agent, profile.firm_id, profile.id, body);
+        conv = await createConversation(agent, firmId, userId, body);
         setConversation(conv);
       }
       const userMsg = await appendMessage(conv.id, 'user', body);

@@ -49,6 +49,7 @@ export function OperatorScreen() {
     const q = searchParams.get('q');
     if (q) {
       setSearchParams({}, { replace: true });
+      setPendingPrompt(q);
       handleSend(q).finally(() => {
         setPendingPrompt(null);
         setDraftingStatus(null);
