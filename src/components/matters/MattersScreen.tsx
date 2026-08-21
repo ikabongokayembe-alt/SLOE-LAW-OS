@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useRef, useEffect, useCallback } from 'react';
 import { useStore } from '../../lib/store';
 import { findBottlenecks } from '../../lib/riskSignals';
 import { useMemo as useMemoRS } from 'react';
@@ -7,7 +7,7 @@ import { InviteClientModal } from './InviteClientModal';
 import { MatterDetailPanel } from './MatterDetailPanel';
 import { runBulkConflictChecks } from '../../lib/bulkConflictCheck';
 import { Matter } from '../../types';
-import { AlertTriangle, Plus, ShieldCheck, UserPlus, CheckCircle2, Clock } from 'lucide-react';
+import { AlertTriangle, Plus, ShieldCheck, UserPlus, CheckCircle2, Clock, ChevronLeft, ChevronRight } from 'lucide-react';
 
 export function MattersScreen() {
   const { matters, matterStages, attorneys, parties, runConflictCheck, linkMatterConflictCheck, clientInvites, clientUsers, auditLog } = useStore();
@@ -18,6 +18,36 @@ export function MattersScreen() {
   const [invitingPartyId, setInvitingPartyId] = useState<string | null>(null);
   const [openMatterId, setOpenMatterId] = useState<string | null>(null);
   const openMatter: Matter | null = matters.find(m => m.id === openMatterId) ?? null;
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+
+  const checkScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    setCanScrollLeft(el.scrollLeft > 5);
+    setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 5);
+  }, []);
+
+  useEffect(() => {
+    checkScroll();
+    const el = scrollRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() => checkScroll());
+    observer.observe(el);
+    window.addEventListener('resize', checkScroll);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', checkScroll);
+    };
+  }, [checkScroll, matterStages, matters]);
+
+  const handleScrollBy = (offset: number) => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollBy({ left: offset, behavior: 'smooth' });
+    }
+  };
 
   // Portal status per party — 'active' (client_users row exists), 'pending'
   // (an unaccepted, unexpired client_invites row exists), or null (never
@@ -119,9 +149,41 @@ export function MattersScreen() {
           width, but side-by-side stages aren't discoverable on a narrow
           screen without a nudge. Desktop doesn't need it (all/most
           columns are usually visible already). */}
-      <div className="md:hidden text-[11px] text-[var(--text-tertiary)] mb-2">← Swipe to see all stages →</div>
+      <div className="relative">
+        {/* Left edge gradient hint */}
+        {canScrollLeft && (
+          <div className="absolute left-0 top-0 bottom-4 w-12 bg-gradient-to-r from-[var(--bg-primary)] to-transparent z-10 pointer-events-none flex items-center justify-start pl-0.5">
+            <button
+              type="button"
+              onClick={() => handleScrollBy(-300)}
+              className="pointer-events-auto p-1 rounded-full bg-[var(--bg-elevated)] border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] shadow-md transition-colors"
+              title="Scroll left"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+          </div>
+        )}
 
-      <div className="flex gap-4 overflow-x-auto pb-4 snap-x snap-mandatory md:snap-none -mx-4 px-4 md:mx-0 md:px-0">
+        {/* Right edge gradient hint & scroll affordance */}
+        {canScrollRight && (
+          <div className="absolute right-0 top-0 bottom-4 w-16 bg-gradient-to-l from-[var(--bg-primary)] via-[var(--bg-primary)]/80 to-transparent z-10 pointer-events-none flex items-center justify-end pr-0.5">
+            <button
+              type="button"
+              onClick={() => handleScrollBy(300)}
+              className="pointer-events-auto flex items-center gap-1 px-2 py-1 rounded-full bg-[var(--bg-elevated)] border border-[var(--border-strong)] text-xs text-[var(--text-primary)] shadow-lg hover:border-[var(--text-primary)] transition-colors"
+              title="Scroll right to view all stage columns"
+            >
+              <span className="text-[10px] font-medium hidden sm:inline">More</span>
+              <ChevronRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
+        <div
+          ref={scrollRef}
+          onScroll={checkScroll}
+          className="flex gap-4 overflow-x-auto pb-4 snap-x snap-mandatory md:snap-none -mx-4 px-4 md:mx-0 md:px-0 custom-scrollbar-x"
+        >
         {stages.map(stage => {
           const stageMatters = matters.filter(m => m.stage_id === stage.id);
           return (
@@ -206,6 +268,7 @@ export function MattersScreen() {
             </div>
           );
         })}
+        </div>
       </div>
 
       {showNew && <NewMatterModal onClose={() => setShowNew(false)} />}

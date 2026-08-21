@@ -61,6 +61,27 @@ body {
   font-size: 14px;
 }
 
+/* Persistent horizontal scrollbar styling for board containers */
+.custom-scrollbar-x {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) var(--bg-tertiary);
+}
+.custom-scrollbar-x::-webkit-scrollbar {
+  height: 6px;
+  display: block;
+}
+.custom-scrollbar-x::-webkit-scrollbar-track {
+  background: var(--bg-tertiary);
+  border-radius: 3px;
+}
+.custom-scrollbar-x::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 3px;
+}
+.custom-scrollbar-x::-webkit-scrollbar-thumb:hover {
+  background: var(--text-tertiary);
+}
+
 @theme {
   --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
   --font-display: 'Inter', ui-sans-serif, system-ui, sans-serif;
