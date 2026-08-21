@@ -45,6 +45,10 @@ async function callEdge(body: { prompt: string; expectJson?: boolean; stream?: b
   }
 }
 
+function ensureJsonHint(prompt: string) {
+  return prompt.toLowerCase().includes('json') ? prompt : `${prompt}\n\nRespond with JSON.`;
+}
+
 function safeParseJson(text: string): any {
   let clean = text.trim();
   // Strip markdown code block wrappers
