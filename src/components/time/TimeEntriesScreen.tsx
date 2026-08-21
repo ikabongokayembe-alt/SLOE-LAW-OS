@@ -172,6 +172,8 @@ export function TimeEntriesScreen() {
   const unbilled = useMemo(() => findUnbilledMatters(matters, unbilledTimeEntries), [matters, unbilledTimeEntries]);
 
   const handleGenerateInvoice = async (matterId: string) => {
+    const isEligible = unbilled.some(u => u.matter.id === matterId);
+    if (!isEligible) return;
     const entryIds = unbilledTimeEntries.filter(t => t.matter_id === matterId && t.billable).map(t => t.id);
     if (entryIds.length === 0) return;
     setInvoicingMatterId(matterId);
@@ -467,15 +469,11 @@ export function TimeEntriesScreen() {
 
                   {/* Group Action Buttons */}
                   <div className="flex items-center gap-2 shrink-0">
-                    {matter && groupUnbilledEntries.length > 0 && (
+                    {matter && isUnbilledFlagged && (
                       <button
                         onClick={() => handleGenerateInvoice(matter.id)}
                         disabled={invoicingMatterId === matter.id}
-                        className={`h-8 px-3 flex items-center gap-1.5 text-xs font-medium rounded transition-all shrink-0 ${
-                          isUnbilledFlagged
-                            ? 'bg-[var(--text-primary)] text-[var(--bg-primary)] hover:opacity-90'
-                            : 'bg-[var(--bg-elevated)] border border-[var(--border-strong)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]'
-                        }`}
+                        className="h-8 px-3 flex items-center gap-1.5 text-xs font-medium bg-[var(--text-primary)] text-[var(--bg-primary)] hover:opacity-90 rounded transition-all shrink-0 shadow-sm"
                       >
                         <FileText className="w-3.5 h-3.5" />
                         <span>{invoicingMatterId === matter.id ? 'Generating…' : 'Generate Invoice'}</span>
