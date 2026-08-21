@@ -3,9 +3,10 @@ import { Link } from 'react-router-dom';
 import { useStore } from '../../lib/store';
 import { useToast } from '../../lib/toast';
 import { assessDeadlineRisk } from '../../lib/riskSignals';
-import { AlertTriangle, Clock, CheckCircle2, CalendarPlus, CalendarCheck2, ChevronLeft, ChevronRight, X } from 'lucide-react';
+import { AlertTriangle, Clock, CheckCircle2, CalendarPlus, CalendarCheck2, ChevronLeft, ChevronRight, X, Eye } from 'lucide-react';
 import { formatDateOnly, parseDateOnly } from '../../lib/dates';
 import { LogTimeModal } from '../time/LogTimeModal';
+import { DeadlineDetailPanel } from './DeadlineDetailPanel';
 import { Deadline } from '../../types';
 
 const TYPE_LABELS: Record<string, string> = {
@@ -14,9 +15,6 @@ const TYPE_LABELS: Record<string, string> = {
 
 const PAGE_SIZE = 25;
 
-// Both sides parsed as local calendar dates (not new Date(dateStr), which
-// parses bare YYYY-MM-DD as UTC midnight and can be off by a day against
-// local midnight depending on the viewer's timezone) — see lib/dates.ts.
 function daysUntil(dateOnlyString: string): number {
   const diff = parseDateOnly(dateOnlyString).getTime() - new Date().setHours(0, 0, 0, 0);
   return Math.round(diff / 86400000);
@@ -27,13 +25,9 @@ export function DeadlinesScreen() {
   const { showToast } = useToast();
   const locale = firm?.locale || 'en-US';
   const [pushingId, setPushingId] = useState<string | null>(null);
-  // Real feedback for "Mark done", not a silent status flip -- a toast
-  // naming what actually changed, plus an optional, dismissible nudge
-  // toward the obvious next step on that SAME matter. Only ever tracks
-  // the most recently completed deadline; marking another replaces it
-  // rather than stacking prompts.
   const [justCompletedId, setJustCompletedId] = useState<string | null>(null);
   const [logTimeFor, setLogTimeFor] = useState<Deadline | null>(null);
+  const [selectedDeadlineId, setSelectedDeadlineId] = useState<string | null>(null);
 
   // Filters — same shape/pattern as TimeEntriesScreen's matter+date-range
   // filter bar. Real volume (151 rows, one long list, sort-by-due-date
@@ -156,7 +150,11 @@ export function DeadlinesScreen() {
               return (
                 <div
                   key={d.id}
-                  className={`flex flex-col sm:flex-row sm:items-center gap-3 p-3 rounded-lg border ${
+                  onClick={() => setSelectedDeadlineId(d.id)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => e.key === 'Enter' && setSelectedDeadlineId(d.id)}
+                  className={`flex flex-col sm:flex-row sm:items-center gap-3 p-3 rounded-lg border cursor-pointer hover:border-[var(--border-strong)] transition-colors ${
                     d.status === 'completed' ? 'border-[var(--border-subtle)] opacity-50' :
                     isOverdue ? 'border-[var(--signal-negative)] bg-[var(--signal-negative)]/5' :
                     isUrgent && d.is_critical ? 'border-[var(--signal-negative)]/60 bg-[var(--signal-negative)]/5' :
@@ -218,7 +216,7 @@ export function DeadlinesScreen() {
                         </Link>
                       ) : calendarConnected === true ? (
                         <button
-                          onClick={() => handlePush(d.id)}
+                          onClick={(e) => { e.stopPropagation(); handlePush(d.id); }}
                           disabled={pushingId === d.id}
                           className="flex items-center gap-1 text-xs px-2.5 py-1.5 border border-[var(--border-subtle)] rounded hover:bg-[var(--bg-tertiary)] transition-colors disabled:opacity-40 whitespace-nowrap"
                         >
@@ -226,7 +224,10 @@ export function DeadlinesScreen() {
                         </button>
                       ) : null}
                       {d.status !== 'completed' && (
-                        <button onClick={() => markComplete(d)} className="text-xs px-2.5 py-1.5 border border-[var(--border-subtle)] rounded hover:bg-[var(--bg-tertiary)] transition-colors whitespace-nowrap">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); markComplete(d); }}
+                          className="text-xs px-2.5 py-1.5 border border-[var(--border-subtle)] rounded hover:bg-[var(--bg-tertiary)] transition-colors whitespace-nowrap"
+                        >
                           Mark done
                         </button>
                       )}
@@ -241,12 +242,16 @@ export function DeadlinesScreen() {
                       <CheckCircle2 className="w-3.5 h-3.5 text-[var(--signal-positive)] shrink-0" />
                       <span className="flex-1">Log time against {matterTitle(d.matter_id)}?</span>
                       <button
-                        onClick={() => setLogTimeFor(d)}
+                        onClick={(e) => { e.stopPropagation(); setLogTimeFor(d); }}
                         className="px-2 py-1 text-xs font-medium bg-[var(--text-primary)] text-[var(--bg-primary)] rounded hover:opacity-90 transition-opacity"
                       >
                         Log time
                       </button>
-                      <button onClick={() => setJustCompletedId(null)} className="text-[var(--text-tertiary)] hover:text-[var(--text-primary)]" aria-label="Dismiss">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setJustCompletedId(null); }}
+                        className="text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+                        aria-label="Dismiss"
+                      >
                         <X className="w-3.5 h-3.5" />
                       </button>
                     </div>
@@ -286,6 +291,13 @@ export function DeadlinesScreen() {
         <LogTimeModal
           onClose={() => { setLogTimeFor(null); setJustCompletedId(null); }}
           defaultMatterId={logTimeFor.matter_id ?? undefined}
+        />
+      )}
+
+      {selectedDeadlineId && deadlines.find(d => d.id === selectedDeadlineId) && (
+        <DeadlineDetailPanel
+          deadline={deadlines.find(d => d.id === selectedDeadlineId)!}
+          onClose={() => setSelectedDeadlineId(null)}
         />
       )}
     </div>

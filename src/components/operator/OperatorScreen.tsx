@@ -1,4 +1,5 @@
 import { useRef, useEffect, useState, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import { Send, Wrench } from 'lucide-react';
 import { useStore } from '../../lib/store';
@@ -25,6 +26,8 @@ export function OperatorScreen() {
   const { matters, deadlines, parties, conflictChecks, firm, clientInvites, communications } = useStore();
   const [inputValue, setInputValue] = useState('');
   const [emailDraft, setEmailDraft] = useState<ComposedEmail | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+
   // Bumped on every write so the rail refetches — see ConversationInbox.
   const [refreshKey, setRefreshKey] = useState(0);
   const bumpRail = useCallback(() => setRefreshKey(k => k + 1), []);
@@ -35,6 +38,15 @@ export function OperatorScreen() {
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [messages, streaming]);
+
+  // Arriving from a handoff (e.g. Deadline detail panel) with a real pre-filled query
+  useEffect(() => {
+    const q = searchParams.get('q');
+    if (q) {
+      handleSend(q);
+      setSearchParams({}, { replace: true });
+    }
+  }, []);
 
   const handleSend = async (overrideText?: string) => {
     const text = overrideText ?? inputValue;
