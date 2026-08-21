@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react';
-import { FileText, Download, ExternalLink, Eye, EyeOff } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { FileText, Download, ExternalLink, Eye, EyeOff, Wrench, Sparkles, BookOpen, Zap } from 'lucide-react';
 import { LawDocument } from '../../types';
 import { supabase, isSupabaseConfigured } from '../../lib/supabase';
 import { DetailPanel, DetailSection } from '../shared/DetailPanel';
+import { useStore } from '../../lib/store';
+import { getHandoffTarget, buildAgentHandoffUrl, isDocumentResearchRelevant } from '../../lib/agentRouting';
 
 function formatBytes(bytes?: number): string {
   if (!bytes) return '—';
@@ -18,15 +21,6 @@ function isPreviewableInline(fileType?: string): 'image' | 'pdf' | null {
   return null;
 }
 
-// Real content preview, not just the existing icon row -- a signed URL for
-// anything the browser can render inline (image/pdf), and the actual
-// extracted text (see migration 0017's extract-document-text pipeline) for
-// everything else once indexing has finished. Never a re-run of extraction
-// here -- this only reads what is already stored, same "no fabrication"
-// posture as the rest of the app. `gapHint`, when passed, surfaces the
-// matter-level document-gap finding (findDocumentGaps in riskSignals.ts)
-// inline with the specific document it's about, when this document's
-// matter has one.
 export function DocumentPreviewContent({
   doc, matterTitle, onToggleClientVisible, onDownload, gapHint,
 }: {
@@ -36,10 +30,16 @@ export function DocumentPreviewContent({
   onDownload: () => void;
   gapHint?: string;
 }) {
+  const { agentRequests, requestAgent } = useStore();
+  const navigate = useNavigate();
   const [signedUrl, setSignedUrl] = useState<string | null>(null);
   const [extractedText, setExtractedText] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [activating, setActivating] = useState(false);
   const inlineKind = isPreviewableInline(doc.file_type);
+
+  const isResearchRelevant = isDocumentResearchRelevant(doc.file_name, doc.file_type);
+  const isResearchAgentActive = agentRequests.some(r => r.agent_key === 'case-law-researcher' && r.status === 'active');
 
   useEffect(() => {
     let cancelled = false;
@@ -60,6 +60,29 @@ export function DocumentPreviewContent({
     return () => { cancelled = true; };
   }, [doc.id, doc.storage_path, doc.extraction_status, inlineKind]);
 
+  const handleDraftingHandoff = () => {
+    const target = getHandoffTarget('drafting');
+    const prompt = `Draft a formal response or follow-up action for document "${doc.file_name}" on matter "${matterTitle}".`;
+    navigate(buildAgentHandoffUrl(target, prompt));
+  };
+
+  const handleAnalysisHandoff = () => {
+    const target = getHandoffTarget('analysis');
+    const prompt = `Summarize and analyze the key provisions, obligations, and risk factors in document "${doc.file_name}" on matter "${matterTitle}".`;
+    navigate(buildAgentHandoffUrl(target, prompt));
+  };
+
+  const handleResearchHandoff = async () => {
+    const target = getHandoffTarget('research');
+    const prompt = `Research relevant case law precedents, statutory rules, and authority applicable to document "${doc.file_name}" on matter "${matterTitle}".`;
+    if (!isResearchAgentActive) {
+      setActivating(true);
+      await requestAgent('case-law-researcher');
+      setActivating(false);
+    }
+    navigate(buildAgentHandoffUrl(target, prompt));
+  };
+
   return (
     <>
       <div className="flex items-center gap-3">
@@ -77,6 +100,53 @@ export function DocumentPreviewContent({
           {gapHint}
         </div>
       )}
+
+      {/* Task-based Agent Handoff Actions */}
+      <DetailSection title="Agent Actions">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <button
+            onClick={handleDraftingHandoff}
+            className="h-8 px-3 text-xs font-medium bg-[var(--text-primary)] text-[var(--bg-primary)] rounded hover:opacity-90 transition-opacity flex items-center justify-center gap-1.5"
+          >
+            <Wrench className="w-3.5 h-3.5" />
+            <span>Draft response with Operator</span>
+          </button>
+
+          <button
+            onClick={handleAnalysisHandoff}
+            className="h-8 px-3 text-xs font-medium bg-[var(--bg-tertiary)] text-[var(--text-primary)] border border-[var(--border-subtle)] rounded hover:opacity-90 transition-opacity flex items-center justify-center gap-1.5"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>Summarize with Analyst</span>
+          </button>
+
+          {isResearchRelevant && (
+            <button
+              onClick={handleResearchHandoff}
+              disabled={activating}
+              className={`h-8 px-3 text-xs font-medium rounded transition-opacity flex items-center justify-center gap-1.5 sm:col-span-2 ${
+                isResearchAgentActive
+                  ? 'bg-[var(--accent-secondary)]/10 text-[var(--accent-secondary)] border border-[var(--accent-secondary)]/30 hover:bg-[var(--accent-secondary)]/20'
+                  : 'bg-[var(--signal-warning)]/10 text-[var(--signal-warning)] border border-[var(--signal-warning)]/30 hover:bg-[var(--signal-warning)]/20'
+              }`}
+            >
+              {activating ? (
+                <span>Activating Legal Research Agent…</span>
+              ) : isResearchAgentActive ? (
+                <>
+                  <BookOpen className="w-3.5 h-3.5" />
+                  <span>Research related case law</span>
+                </>
+              ) : (
+                <>
+                  <Zap className="w-3.5 h-3.5" />
+                  <span>Activate Legal Research Agent & Research</span>
+                </>
+              )}
+            </button>
+          )}
+        </div>
+      </DetailSection>
 
       <div className="flex items-center gap-2">
         <button onClick={onDownload} className="h-8 px-3 flex items-center gap-1.5 text-xs font-medium bg-[var(--bg-tertiary)] border border-[var(--border-default)] rounded hover:bg-[var(--bg-elevated)] transition-colors">
