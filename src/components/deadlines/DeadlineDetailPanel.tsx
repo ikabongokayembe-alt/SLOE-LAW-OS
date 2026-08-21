@@ -218,7 +218,7 @@ export function DeadlineDetailPanel({ deadline, onClose }: DeadlineDetailPanelPr
                       <span className="font-medium text-[var(--text-primary)] truncate">{doc.file_name}</span>
                     </div>
                     <span className="text-[10px] text-[var(--text-tertiary)] font-mono shrink-0">
-                      {formatDateOnly(doc.created_at, locale)}
+                      {new Date(doc.created_at).toLocaleDateString(locale, { day: 'numeric', month: 'short', year: 'numeric' })}
                     </span>
                   </div>
                 ))}
