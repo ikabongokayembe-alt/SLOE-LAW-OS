@@ -170,21 +170,27 @@ export const emailComposePrompt = (
   message: string,
   matters: EmailComposeCandidate[],
   parties: EmailComposeCandidate[],
-) => `
-User's request: ${message}
+) => `User request: ${message}
 
-You are drafting an email on behalf of an attorney at a law firm, from the request above. Return ONLY a JSON object, no other text:
+You are drafting an email on behalf of an attorney at a law firm.
 
-{
-  "matter_id": "string or null — MUST be one of the ids in the Matters list below, or null if you cannot tell which matter this is about",
-  "party_id": "string or null — MUST be one of the ids in the People list below, or null if you cannot tell who this should go to",
-  "subject": "string — a real, specific email subject line",
-  "body": "string — a genuinely written, professional email body. Reference only facts already present in the user's request or in the matter/people names given below — never invent case facts, dates, outcomes, or details you were not given. If you don't have enough to write substantively, write a short, honest placeholder body the attorney can fill in rather than inventing content."
-}
-
-Matters (id, title) — pick matter_id from this list only, or null:
+Available Matters:
 ${JSON.stringify(matters)}
 
-People (id, name) — pick party_id from this list only, or null:
+Available People:
 ${JSON.stringify(parties)}
+
+Respond ONLY with a JSON object formatted as follows:
+{
+  "matter_id": null,
+  "party_id": null,
+  "subject": "Clear email subject line",
+  "body": "Professional email body text"
+}
+
+Rules:
+1. matter_id: string id from Available Matters or null if unlinked.
+2. party_id: string id from Available People or null if unknown.
+3. subject: concise, professional email subject.
+4. body: professional email body. Do not include raw unescaped double quotes inside string values. Do not invent unstated case facts or dates.
 `;

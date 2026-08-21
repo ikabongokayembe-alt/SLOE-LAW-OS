@@ -45,15 +45,36 @@ async function callEdge(body: { prompt: string; expectJson?: boolean; stream?: b
   }
 }
 
-function ensureJsonHint(prompt: string) {
-  return prompt.toLowerCase().includes('json') ? prompt : `${prompt}\n\nRespond with JSON.`;
+function safeParseJson(text: string): any {
+  let clean = text.trim();
+  // Strip markdown code block wrappers
+  clean = clean.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+
+  // Extract JSON object if wrapped in explanatory text
+  const match = clean.match(/\{[\s\S]*\}/);
+  if (match) {
+    clean = match[0];
+  }
+
+  try {
+    return JSON.parse(clean);
+  } catch {
+    // Escape unescaped control characters inside JSON string fields as fallback
+    const sanitized = clean.replace(/[\u0000-\u001F]+/g, (m) => {
+      if (m === '\n') return '\\n';
+      if (m === '\r') return '\\r';
+      if (m === '\t') return '\\t';
+      return '';
+    });
+    return JSON.parse(sanitized);
+  }
 }
 
 export async function callGemini(prompt: string, expectJson: boolean = true, feature: string = 'generic'): Promise<any> {
   const key = prompt.slice(0, 200) + String(expectJson) + feature;
   if (cache.has(key)) {
     const cached = cache.get(key)!;
-    return expectJson ? JSON.parse(cached) : cached;
+    return expectJson ? safeParseJson(cached) : cached;
   }
 
   const actualPrompt = expectJson ? ensureJsonHint(prompt) : prompt;
@@ -68,12 +89,8 @@ export async function callGemini(prompt: string, expectJson: boolean = true, fea
       if (!text) throw new Error('Empty response');
 
       if (expectJson) {
-        let clean = text.trim();
-        if (clean.startsWith('```json')) clean = clean.substring(7);
-        if (clean.startsWith('```')) clean = clean.substring(3);
-        if (clean.endsWith('```')) clean = clean.substring(0, clean.length - 3);
-        const json = JSON.parse(clean);
-        cache.set(key, clean);
+        const json = safeParseJson(text);
+        cache.set(key, text);
         return json;
       }
 

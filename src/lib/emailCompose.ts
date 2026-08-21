@@ -120,23 +120,44 @@ export async function tryComposeEmail(
   const matterCandidates = ctx.matters.slice(0, MAX_CANDIDATES).map(m => ({ id: m.id, label: m.title }));
   const partyCandidates = ctx.parties.slice(0, MAX_CANDIDATES).map(p => ({ id: p.id, label: p.name }));
 
-  let raw: any;
+  let raw: any = null;
   try {
     raw = await callGemini(emailComposePrompt(message, matterCandidates, partyCandidates), true, 'email_draft');
-  } catch {
-    return null;
+  } catch (err) {
+    console.warn('[tryComposeEmail] Structured JSON mode failed, attempting plain text fallback:', err);
+    try {
+      const textRaw = await callGemini(emailComposePrompt(message, matterCandidates, partyCandidates), false, 'email_draft');
+      const subjectMatch = typeof textRaw === 'string' ? (textRaw.match(/"subject"\s*:\s*"([^"]+)"/i) || textRaw.match(/Subject:\s*([^\n]+)/i)) : null;
+      const bodyMatch = typeof textRaw === 'string' ? (textRaw.match(/"body"\s*:\s*"([\s\S]+?)"\s*\}/i) || textRaw.match(/Body:\s*([\s\S]+)/i)) : null;
+      const matterMatch = typeof textRaw === 'string' ? textRaw.match(/"matter_id"\s*:\s*"([^"]+)"/i) : null;
+      const partyMatch = typeof textRaw === 'string' ? textRaw.match(/"party_id"\s*:\s*"([^"]+)"/i) : null;
+      raw = {
+        matter_id: matterMatch ? matterMatch[1] : null,
+        party_id: partyMatch ? partyMatch[1] : null,
+        subject: subjectMatch ? subjectMatch[1] : null,
+        body: bodyMatch ? bodyMatch[1] : String(textRaw),
+      };
+    } catch {
+      return null;
+    }
   }
 
-  // Re-validate membership even though the prompt already constrained
-  // the choices to a closed list — a model can still return an id
-  // shaped like the others that was never actually offered. Same
-  // defense-in-depth reasoning as execute_tool re-checking a tool's
-  // classification server-side rather than trusting discovery-time
-  // filtering.
-  const matter = ctx.matters.find(m => m.id === raw?.matter_id) ?? null;
-  const party = ctx.parties.find(p => p.id === raw?.party_id) ?? null;
+  if (!raw) return null;
 
-  const subject = typeof raw?.subject === 'string' && raw.subject.trim() ? raw.subject.trim() : 'Following up';
+  // Infer matter from candidate list or prompt text if model returned unlinked
+  let matter = ctx.matters.find(m => m.id === raw?.matter_id) ?? null;
+  if (!matter) {
+    const lowerMessage = message.toLowerCase();
+    matter = ctx.matters.find(m => lowerMessage.includes(m.title.toLowerCase())) ?? null;
+  }
+
+  // Infer client party if party_id was null or unlinked
+  let party = ctx.parties.find(p => p.id === raw?.party_id) ?? null;
+  if (!party && matter) {
+    party = ctx.parties.find(p => p.id === matter.client_party_id) ?? null;
+  }
+
+  const subject = typeof raw?.subject === 'string' && raw.subject.trim() ? raw.subject.trim() : `Update: ${matter?.title ?? 'Matter'}`;
   const body = typeof raw?.body === 'string' ? raw.body.trim() : '';
 
   const to = resolveRecipientEmail(party?.id ?? null, matter?.id ?? null, ctx);
