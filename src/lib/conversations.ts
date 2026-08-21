@@ -102,6 +102,7 @@ export async function appendMessage(
     return {
       id: `local-msg-${Date.now()}`,
       conversation_id: conversationId,
+      firm_id: '00000000-0000-0000-0000-000000000000',
       role,
       content,
       created_at: new Date().toISOString(),
@@ -120,6 +121,7 @@ export async function appendMessage(
     return {
       id: `local-msg-${Date.now()}`,
       conversation_id: conversationId,
+      firm_id: '00000000-0000-0000-0000-000000000000',
       role,
       content,
       created_at: new Date().toISOString(),
