@@ -174,6 +174,7 @@ export function TimeEntriesScreen() {
   const [showLog, setShowLog] = useState(false);
   const [editingEntry, setEditingEntry] = useState<TimeEntry | null>(null);
   const [invoicingMatterId, setInvoicingMatterId] = useState<string | null>(null);
+  const [billingMatterId, setBillingMatterId] = useState<string | null>(null);
   const [issuingInvoiceId, setIssuingInvoiceId] = useState<string | null>(null);
   const [selectedMatterForDetail, setSelectedMatterForDetail] = useState<Matter | null>(null);
 
@@ -237,9 +238,9 @@ export function TimeEntriesScreen() {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
-  const handleIssueInvoice = async (inv: Invoice) => {
+  const issueInvoiceObject = async (inv: Invoice): Promise<{ success: boolean; email?: string; error?: string }> => {
     const matter = matters.find(m => m.id === inv.matter_id);
-    if (!matter) return;
+    if (!matter) return { success: false, error: 'Matter not found' };
     const clientParty = parties.find(p => p.id === matter.client_party_id);
     
     // Extract client email from party notes, portal invites, or previous communications
@@ -269,8 +270,8 @@ export function TimeEntriesScreen() {
     }
 
     if (!clientEmail) {
-      showToast('error', `Cannot issue invoice: No email address on file for client ${clientParty?.name || 'Party'}.`);
-      return;
+      const errMsg = `No email address on file for client ${clientParty?.name || 'Party'}.`;
+      return { success: false, error: errMsg };
     }
 
     setIssuingInvoiceId(inv.id);
@@ -292,8 +293,18 @@ export function TimeEntriesScreen() {
     });
 
     setIssuingInvoiceId(null);
-    if (!res?.error) {
-      showToast('success', `Invoice ${inv.invoice_number} issued to ${clientEmail}.`);
+    if (res?.error) {
+      return { success: false, email: clientEmail, error: res.error };
+    }
+    return { success: true, email: clientEmail };
+  };
+
+  const handleIssueInvoice = async (inv: Invoice) => {
+    const res = await issueInvoiceObject(inv);
+    if (res.success && res.email) {
+      showToast('success', `Invoice ${inv.invoice_number} issued to ${res.email}.`);
+    } else if (res.error) {
+      showToast('error', `Cannot issue invoice: ${res.error}`);
     }
   };
 
@@ -314,6 +325,41 @@ export function TimeEntriesScreen() {
     if (result.invoice && !isDevMode) {
       const { data } = await supabase.storage.from('matter-documents').createSignedUrl(result.invoice.storage_path, 60);
       if (data) window.open(data.signedUrl, '_blank');
+    }
+  };
+
+  const handleBillInvoice = async (matterId: string) => {
+    const entriesToInvoice = unbilledTimeEntries.filter(t => t.matter_id === matterId && t.billable);
+    const totalMins = entriesToInvoice.reduce((sum, t) => sum + (t.duration_minutes || 0), 0);
+    if (totalMins < 120) return;
+    const entryIds = entriesToInvoice.map(t => t.id);
+    setBillingMatterId(matterId);
+
+    // Step 1: Generate Invoice
+    const result = await generateInvoice(matterId, entryIds);
+
+    if (!result.invoice) {
+      setBillingMatterId(null);
+      showToast('error', `Failed to generate invoice: ${result.error || 'Unknown error'}`);
+      return;
+    }
+
+    const newInvoice = result.invoice;
+
+    if (!isDevMode && newInvoice.storage_path) {
+      const { data } = await supabase.storage.from('matter-documents').createSignedUrl(newInvoice.storage_path, 60);
+      if (data) window.open(data.signedUrl, '_blank');
+    }
+
+    // Step 2: Issue (email) Invoice immediately
+    const issueRes = await issueInvoiceObject(newInvoice);
+    setBillingMatterId(null);
+
+    if (issueRes.success && issueRes.email) {
+      showToast('success', `Invoice ${newInvoice.invoice_number} generated and issued to ${issueRes.email}.`);
+    } else {
+      // Honest partial success reporting: invoice was created, but email step failed
+      showToast('warning', `Invoice ${newInvoice.invoice_number} generated, but could not be issued: ${issueRes.error || 'Email sending failed'}.`);
     }
   };
 
@@ -600,15 +646,27 @@ export function TimeEntriesScreen() {
                   {/* Group Action Buttons — Billing-First */}
                   <div className="flex items-center gap-1.5 shrink-0">
                     {matter && groupUnbilledMinutes > 0 && (
-                      <button
-                        onClick={() => handleGenerateInvoice(matter.id)}
-                        disabled={groupUnbilledMinutes < 120 || invoicingMatterId === matter.id}
-                        title={groupUnbilledMinutes < 120 ? `Needs ≥2h unbilled to invoice (currently ${formatHours(groupUnbilledMinutes)}h)` : 'Generate Invoice'}
-                        className="h-8 px-3 flex items-center gap-1.5 text-xs font-medium bg-[var(--text-primary)] text-[var(--bg-primary)] hover:opacity-90 rounded transition-all shrink-0 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        <FileText className="w-3.5 h-3.5" />
-                        <span>{invoicingMatterId === matter.id ? 'Generating…' : 'Generate Invoice'}</span>
-                      </button>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          onClick={() => handleGenerateInvoice(matter.id)}
+                          disabled={groupUnbilledMinutes < 120 || invoicingMatterId === matter.id || billingMatterId === matter.id}
+                          title={groupUnbilledMinutes < 120 ? `Needs ≥2h unbilled to invoice (currently ${formatHours(groupUnbilledMinutes)}h)` : 'Generate invoice without sending'}
+                          className="h-8 px-3 flex items-center gap-1.5 text-xs font-medium border border-[var(--border-subtle)] bg-[var(--bg-secondary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] rounded transition-all shrink-0 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          <FileText className="w-3.5 h-3.5" />
+                          <span>{invoicingMatterId === matter.id ? 'Generating…' : 'Generate Invoice'}</span>
+                        </button>
+
+                        <button
+                          onClick={() => handleBillInvoice(matter.id)}
+                          disabled={groupUnbilledMinutes < 120 || invoicingMatterId === matter.id || billingMatterId === matter.id}
+                          title={groupUnbilledMinutes < 120 ? `Needs ≥2h unbilled to bill invoice (currently ${formatHours(groupUnbilledMinutes)}h)` : 'Generate and email invoice to client immediately'}
+                          className="h-8 px-3 flex items-center gap-1.5 text-xs font-medium bg-[var(--text-primary)] text-[var(--bg-primary)] hover:opacity-90 rounded transition-all shrink-0 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          <Send className="w-3.5 h-3.5" />
+                          <span>{billingMatterId === matter.id ? 'Billing…' : 'Bill Invoice'}</span>
+                        </button>
+                      </div>
                     )}
 
                     {matter && latestInvoice && (
