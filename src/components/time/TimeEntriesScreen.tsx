@@ -7,7 +7,7 @@ import { useToast } from '../../lib/toast';
 import {
   Clock, Plus, Download, Pencil, Trash2, Banknote, FileText,
   ExternalLink, UserPlus, User, CheckCircle2, AlertTriangle,
-  Layers, List
+  Layers, List, Eye, Send
 } from 'lucide-react';
 import { formatDateOnly } from '../../lib/dates';
 import { computeAmount, formatAmount, formatHours } from '../../lib/timeEntries';
