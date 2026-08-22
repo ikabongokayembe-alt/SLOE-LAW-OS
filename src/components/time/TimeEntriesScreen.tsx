@@ -34,7 +34,7 @@ function TimeEntryRow({
   t: TimeEntry;
   locale: string;
   currency: string;
-  attorneyName: (id: string | null) => string | null;
+  attorneyName: string | null;
   matterTitle?: string;
   showMatterTitle?: boolean;
   onEdit: () => void;
@@ -43,7 +43,7 @@ function TimeEntryRow({
   onOpenInvoice?: () => void;
 }) {
   const amount = computeAmount(t.duration_minutes, t.rate);
-  const name = attorneyName(t.attorney_id);
+  const name = attorneyName;
 
   return (
     <div
@@ -160,7 +160,7 @@ function TimeEntryRow({
 
 export function TimeEntriesScreen() {
   const {
-    timeEntries, matters, attorneys, deleteTimeEntry, firm, invoices, parties, generateInvoice, sendMatterCommunication
+    timeEntries, matters, attorneys, practiceAreas, deleteTimeEntry, firm, invoices, parties, generateInvoice, sendMatterCommunication
   } = useStore();
   const { isDevMode } = useAuth();
   const { showToast } = useToast();
