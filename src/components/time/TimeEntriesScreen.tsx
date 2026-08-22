@@ -3,6 +3,7 @@ import { useStore } from '../../lib/store';
 import { useAuth } from '../../lib/auth';
 import { supabase, isSupabaseConfigured } from '../../lib/supabase';
 import { generateInvoicePdf } from '../../lib/invoice';
+import { useToast } from '../../lib/toast';
 import {
   Clock, Plus, Download, Pencil, Trash2, Banknote, FileText,
   ExternalLink, UserPlus, User, CheckCircle2, AlertTriangle,
