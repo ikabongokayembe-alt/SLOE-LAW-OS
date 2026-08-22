@@ -43,6 +43,7 @@ function TimeEntryRow({
   onOpenInvoice?: () => void;
 }) {
   const amount = computeAmount(t.duration_minutes, t.rate);
+  const entryCurrency = t.currency ?? currency;
   const name = attorneyName;
 
   return (
@@ -160,7 +161,7 @@ function TimeEntryRow({
 
 export function TimeEntriesScreen() {
   const {
-    timeEntries, matters, attorneys, practiceAreas, deleteTimeEntry, firm, invoices, parties, generateInvoice, sendMatterCommunication
+    timeEntries, matters, attorneys, practiceAreas, deleteTimeEntry, firm, invoices, parties, generateInvoice, sendMatterCommunication, clientInvites, communications
   } = useStore();
   const { isDevMode } = useAuth();
   const { showToast } = useToast();
@@ -240,7 +241,32 @@ export function TimeEntriesScreen() {
     const matter = matters.find(m => m.id === inv.matter_id);
     if (!matter) return;
     const clientParty = parties.find(p => p.id === matter.client_party_id);
-    const clientEmail = clientParty?.email?.trim();
+    
+    // Extract client email from party notes, portal invites, or previous communications
+    let clientEmail: string | null = null;
+
+    // 1. Check client invites for this party
+    if (clientParty) {
+      const invite = clientInvites
+        .filter(i => i.party_id === clientParty.id)
+        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
+      if (invite?.email?.trim()) clientEmail = invite.email.trim();
+    }
+
+    // 2. Parse out of party.notes (written by submit_intake as "Email: ..." or general text)
+    if (!clientEmail && clientParty?.notes) {
+      const match = /Email:\s*([^\s;,\n\r]+@[^\s;,\n\r]+)/i.exec(clientParty.notes) ||
+                    /([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i.exec(clientParty.notes);
+      if (match?.[1]) clientEmail = match[1].trim();
+    }
+
+    // 3. Fall back to past communications logged for this matter
+    if (!clientEmail) {
+      const sentTo = Array.from(
+        new Set(communications.filter(c => c.matter_id === matter.id).map(c => c.sent_to.trim().toLowerCase()))
+      );
+      if (sentTo.length === 1 && sentTo[0]) clientEmail = sentTo[0];
+    }
 
     if (!clientEmail) {
       showToast('error', `Cannot issue invoice: No email address on file for client ${clientParty?.name || 'Party'}.`);
