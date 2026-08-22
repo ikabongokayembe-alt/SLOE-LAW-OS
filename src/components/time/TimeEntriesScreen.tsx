@@ -228,10 +228,10 @@ export function TimeEntriesScreen() {
   };
 
   const handleGenerateInvoice = async (matterId: string) => {
-    const isEligible = unbilled.some(u => u.matter.id === matterId);
-    if (!isEligible) return;
-    const entryIds = unbilledTimeEntries.filter(t => t.matter_id === matterId && t.billable).map(t => t.id);
-    if (entryIds.length === 0) return;
+    const entriesToInvoice = unbilledTimeEntries.filter(t => t.matter_id === matterId && t.billable);
+    const totalMins = entriesToInvoice.reduce((sum, t) => sum + (t.duration_minutes || 0), 0);
+    if (totalMins < 120) return;
+    const entryIds = entriesToInvoice.map(t => t.id);
     setInvoicingMatterId(matterId);
     const result = await generateInvoice(matterId, entryIds);
     setInvoicingMatterId(null);
@@ -531,7 +531,7 @@ export function TimeEntriesScreen() {
 
                   {/* Group Action Buttons */}
                   <div className="flex items-center gap-2 shrink-0">
-                    {matter && isUnbilledFlagged && (
+                    {matter && groupUnbilledMinutes >= 120 && (
                       <button
                         onClick={() => handleGenerateInvoice(matter.id)}
                         disabled={invoicingMatterId === matter.id}

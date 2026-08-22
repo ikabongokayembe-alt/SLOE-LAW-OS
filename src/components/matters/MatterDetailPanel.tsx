@@ -36,12 +36,13 @@ function daysUntil(dateOnlyString: string): number {
 export function MatterDetailPanel({ matter, onClose }: { matter: Matter; onClose: () => void }) {
   const {
     matterStages, practiceAreas, attorneys, parties, matters, deadlines, conflictChecks, documents, timeEntries, invoices,
-    communications, auditLog, matterParties, partyRelationships, addMatterParty, removeMatterParty, deleteDocument, setDocumentClientVisible, markInvoicePaid, firm,
+    communications, auditLog, matterParties, partyRelationships, addMatterParty, removeMatterParty, deleteDocument, setDocumentClientVisible, markInvoicePaid, firm, generateInvoice,
   } = useStore();
   const { isDevMode } = useAuth();
   const { showToast } = useToast();
   const navigate = useNavigate();
   const [markingPaidId, setMarkingPaidId] = useState<string | null>(null);
+  const [isGeneratingInvoice, setIsGeneratingInvoice] = useState(false);
   const locale = firm?.locale || 'en-US';
 
   const [addPartyId, setAddPartyId] = useState('');
@@ -57,12 +58,35 @@ export function MatterDetailPanel({ matter, onClose }: { matter: Matter; onClose
   const matterDeadlines = useMemo(() => deadlines.filter(d => d.matter_id === matter.id && !d.deleted_at), [deadlines, matter.id]);
   const matterDocuments = useMemo(() => documents.filter(d => d.matter_id === matter.id), [documents, matter.id]);
   const matterTimeEntries = useMemo(() => timeEntries.filter(t => t.matter_id === matter.id), [timeEntries, matter.id]);
-  // Retrievable later, not just a one-time PDF download -- see migration
-  // 0025 / lib/invoice.ts.
   const matterInvoices = useMemo(() => invoices.filter(i => i.matter_id === matter.id), [invoices, matter.id]);
   const matterCommunications = useMemo(() => communications.filter(c => c.matter_id === matter.id), [communications, matter.id]);
   const matterConflictChecks = useMemo(() => conflictChecks.filter(c => c.matter_id === matter.id), [conflictChecks, matter.id]);
   const additionalParties = useMemo(() => matterParties.filter(mp => mp.matter_id === matter.id), [matterParties, matter.id]);
+
+  const matterUnbilledEntries = useMemo(() => matterTimeEntries.filter(t => !t.invoice_id && t.billable), [matterTimeEntries]);
+  const matterUnbilledMinutes = useMemo(() => matterUnbilledEntries.reduce((sum, t) => sum + (t.duration_minutes || 0), 0), [matterUnbilledEntries]);
+  const matterUnbilledAmountsByCurrency = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const t of matterUnbilledEntries) {
+      const amount = computeAmount(t.duration_minutes, t.rate);
+      if (amount !== null) {
+        const code = t.currency ?? firm?.currency ?? 'USD';
+        map.set(code, (map.get(code) ?? 0) + amount);
+      }
+    }
+    return map;
+  }, [matterUnbilledEntries, firm?.currency]);
+
+  const handleGenerateInvoiceForMatter = async () => {
+    const entryIds = matterUnbilledEntries.map(t => t.id);
+    if (entryIds.length === 0 || matterUnbilledMinutes < 120) return;
+    setIsGeneratingInvoice(true);
+    const result = await generateInvoice(matter.id, entryIds);
+    setIsGeneratingInvoice(false);
+    if (result.invoice) {
+      handleOpenInvoice(result.invoice);
+    }
+  };
 
   // Same detectors as Command Center / MattersScreen's bottleneck badge /
   // DeadlinesScreen's risk line / DocumentsScreen's gap banner -- scoped
@@ -362,44 +386,81 @@ export function MatterDetailPanel({ matter, onClose }: { matter: Matter; onClose
           )}
         </DetailSection>
 
-        <DetailSection title={`Invoices (${matterInvoices.length})`}>
+        <DetailSection title={`Billing & Invoices (${matterInvoices.length})`}>
+          {/* Unbilled Balance & Generation Card */}
+          <div className="bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded-lg p-3 mb-3 shadow-sm">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <div className="text-[10px] font-mono uppercase tracking-wider text-[var(--text-tertiary)]">Unbilled Balance</div>
+                <div className="flex items-baseline gap-2 mt-0.5">
+                  <span className="text-base font-semibold text-[var(--text-primary)]">
+                    {formatHours(matterUnbilledMinutes)} hrs
+                  </span>
+                  {matterUnbilledAmountsByCurrency.size > 0 && (
+                    <span className="text-xs font-mono text-[var(--text-secondary)] font-medium">
+                      ({Array.from(matterUnbilledAmountsByCurrency.entries()).map(([code, amt]) => formatAmount(amt, code, locale)).join(' + ')})
+                    </span>
+                  )}
+                </div>
+                {matterUnbilledMinutes > 0 && matterUnbilledMinutes < 120 && (
+                  <div className="text-[11px] text-[var(--text-tertiary)] mt-1 italic">
+                    Under 2.0 hrs minimum invoicing threshold ({formatHours(120 - matterUnbilledMinutes)}h more needed to generate invoice).
+                  </div>
+                )}
+              </div>
+
+              {matterUnbilledMinutes >= 120 && (
+                <button
+                  onClick={handleGenerateInvoiceForMatter}
+                  disabled={isGeneratingInvoice}
+                  className="h-8 px-3 flex items-center gap-1.5 text-xs font-medium bg-[var(--text-primary)] text-[var(--bg-primary)] hover:opacity-90 rounded transition-all shrink-0 shadow-sm disabled:opacity-50"
+                >
+                  <FileText className="w-3.5 h-3.5" />
+                  <span>{isGeneratingInvoice ? 'Generating…' : 'Generate Invoice'}</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Generated Invoices List */}
           {matterInvoices.length === 0 ? (
-            <div className="text-xs text-[var(--text-tertiary)]">No invoices generated for this matter yet — generate one from the Time screen's unbilled-time banner.</div>
+            <div className="text-xs text-[var(--text-tertiary)] italic">No invoices generated for this matter yet.</div>
           ) : (
-            <div className="space-y-1.5">
+            <div className="space-y-2">
               {matterInvoices.map(inv => (
-                <div key={inv.id} className="bg-[var(--bg-tertiary)] rounded-lg px-2.5 py-2">
+                <div key={inv.id} className="bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded-lg px-3 py-2.5 shadow-sm">
                   <button
                     onClick={() => handleOpenInvoice(inv)}
                     className="w-full flex items-center justify-between gap-2 text-sm text-left hover:opacity-80 transition-opacity group"
                   >
                     <span className="flex items-center gap-1.5 min-w-0 flex-wrap">
                       <Receipt className="w-3.5 h-3.5 text-[var(--accent-primary)] shrink-0" />
-                      <span className="truncate font-medium">{inv.invoice_number}</span>
+                      <span className="truncate font-semibold text-[var(--text-primary)]">{inv.invoice_number}</span>
                       {inv.status === 'paid' ? (
-                        <span className="flex items-center gap-1 text-[10px] uppercase tracking-wider text-[var(--signal-positive)] bg-[var(--signal-positive)]/10 rounded-full px-1.5 py-0.5 shrink-0 font-medium">
+                        <span className="flex items-center gap-1 text-[10px] uppercase tracking-wider text-[var(--signal-positive)] bg-[var(--signal-positive)]/10 rounded-full px-2 py-0.5 shrink-0 font-medium">
                           <CheckCircle2 className="w-2.5 h-2.5" /> Paid
                         </span>
                       ) : isLawPayConnected(firm) ? (
-                        <span className="flex items-center gap-1 text-[10px] uppercase tracking-wider text-[var(--accent-secondary)] bg-[var(--accent-secondary)]/10 rounded-full px-1.5 py-0.5 shrink-0 font-medium" title="Online LawPay checkout enabled">
+                        <span className="flex items-center gap-1 text-[10px] uppercase tracking-wider text-[var(--accent-secondary)] bg-[var(--accent-secondary)]/10 rounded-full px-2 py-0.5 shrink-0 font-medium" title="Online LawPay checkout enabled">
                           <CreditCard className="w-2.5 h-2.5" /> LawPay Ready
                         </span>
                       ) : (
-                        <span className="text-[10px] uppercase tracking-wider text-[var(--text-tertiary)] bg-[var(--bg-secondary)] rounded-full px-1.5 py-0.5 shrink-0" title="LawPay not configured in Firm Settings">
+                        <span className="text-[10px] uppercase tracking-wider text-[var(--text-tertiary)] bg-[var(--bg-secondary)] rounded-full px-2 py-0.5 shrink-0" title="LawPay not configured in Firm Settings">
                           Manual Payment Only
                         </span>
                       )}
                     </span>
                     <span className="text-xs text-[var(--text-tertiary)] group-hover:text-[var(--text-primary)] shrink-0 ml-2 flex items-center gap-1.5 transition-colors">
                       <span>{formatDateOnly(inv.issued_date, locale, { day: 'numeric', month: 'short', year: 'numeric' })}</span>
-                      {inv.total_amount !== null && <span>· {formatAmount(inv.total_amount, inv.currency, locale)}</span>}
-                      <span className="inline-flex items-center gap-0.5 text-[11px] font-medium text-[var(--accent-secondary)] bg-[var(--bg-secondary)] px-1.5 py-0.5 rounded border border-[var(--border-subtle)] ml-1">
+                      {inv.total_amount !== null && <span className="font-mono font-medium text-[var(--text-primary)]">· {formatAmount(inv.total_amount, inv.currency, locale)}</span>}
+                      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-[var(--accent-secondary)] bg-[var(--bg-primary)] px-2 py-0.5 rounded border border-[var(--border-subtle)] ml-1 shadow-sm">
                         <FileText className="w-3 h-3" /> View PDF
                       </span>
                     </span>
                   </button>
+
                   {inv.status === 'unpaid' && (
-                    <div className="flex items-center justify-between mt-1.5 pl-5 text-[11px]">
+                    <div className="flex items-center justify-between mt-2 pl-5 pt-1.5 border-t border-[var(--border-subtle)]/50 text-[11px]">
                       <div className="flex items-center gap-3">
                         <button
                           onClick={() => handleCopyPaymentLink(inv.id)}
@@ -411,7 +472,7 @@ export function MatterDetailPanel({ matter, onClose }: { matter: Matter; onClose
                         <button
                           onClick={() => handleMarkPaid(inv.id)}
                           disabled={markingPaidId === inv.id}
-                          className="flex items-center gap-1 text-[var(--text-tertiary)] hover:text-[var(--signal-positive)] disabled:opacity-40"
+                          className="flex items-center gap-1 text-[var(--text-tertiary)] hover:text-[var(--signal-positive)] disabled:opacity-40 font-medium"
                         >
                           <CheckCircle2 className="w-3 h-3" /> {markingPaidId === inv.id ? 'Marking…' : 'Mark as paid'}
                         </button>
@@ -422,7 +483,7 @@ export function MatterDetailPanel({ matter, onClose }: { matter: Matter; onClose
                     </div>
                   )}
                   {inv.status === 'paid' && inv.paid_at && (
-                    <div className="flex items-center gap-1 text-[11px] text-[var(--text-tertiary)] mt-1 pl-5">
+                    <div className="flex items-center gap-1 text-[11px] text-[var(--text-tertiary)] mt-1.5 pl-5 pt-1.5 border-t border-[var(--border-subtle)]/50">
                       <span>Paid {new Date(inv.paid_at).toLocaleDateString(locale, { day: 'numeric', month: 'short', year: 'numeric' })}</span>
                       {inv.lawpay_charge_id ? (
                         <span className="flex items-center gap-1 text-[var(--signal-positive)] font-medium">
@@ -433,7 +494,6 @@ export function MatterDetailPanel({ matter, onClose }: { matter: Matter; onClose
                       )}
                     </div>
                   )}
-
                 </div>
               ))}
             </div>
