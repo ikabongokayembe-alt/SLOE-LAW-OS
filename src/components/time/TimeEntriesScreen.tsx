@@ -599,11 +599,12 @@ export function TimeEntriesScreen() {
 
                   {/* Group Action Buttons — Billing-First */}
                   <div className="flex items-center gap-1.5 shrink-0">
-                    {matter && groupUnbilledMinutes >= 120 && (
+                    {matter && groupUnbilledMinutes > 0 && (
                       <button
                         onClick={() => handleGenerateInvoice(matter.id)}
-                        disabled={invoicingMatterId === matter.id}
-                        className="h-8 px-3 flex items-center gap-1.5 text-xs font-medium bg-[var(--text-primary)] text-[var(--bg-primary)] hover:opacity-90 rounded transition-all shrink-0 shadow-sm disabled:opacity-50"
+                        disabled={groupUnbilledMinutes < 120 || invoicingMatterId === matter.id}
+                        title={groupUnbilledMinutes < 120 ? `Needs ≥2h unbilled to invoice (currently ${formatHours(groupUnbilledMinutes)}h)` : 'Generate Invoice'}
+                        className="h-8 px-3 flex items-center gap-1.5 text-xs font-medium bg-[var(--text-primary)] text-[var(--bg-primary)] hover:opacity-90 rounded transition-all shrink-0 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         <FileText className="w-3.5 h-3.5" />
                         <span>{invoicingMatterId === matter.id ? 'Generating…' : 'Generate Invoice'}</span>
