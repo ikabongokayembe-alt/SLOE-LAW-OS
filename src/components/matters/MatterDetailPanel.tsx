@@ -4,7 +4,8 @@ import { Matter, MatterPartyRole } from '../../types';
 import { useStore } from '../../lib/store';
 import { useAuth } from '../../lib/auth';
 import { useToast } from '../../lib/toast';
-import { supabase } from '../../lib/supabase';
+import { supabase, isSupabaseConfigured } from '../../lib/supabase';
+import { generateInvoicePdf } from '../../lib/invoice';
 import { buildLawPayPaymentLink, isLawPayConnected } from '../../lib/lawpay';
 import { DetailPanel, DetailSection } from '../shared/DetailPanel';
 import { ConflictCheckDetailContent } from '../parties/ConflictCheckDetail';
@@ -13,7 +14,7 @@ import { findBottlenecks, assessDeadlineRisk, findDocumentGaps } from '../../lib
 import { buildUrgentActions } from '../../lib/urgentActions';
 import { formatDateOnly, parseDateOnly, daysUntilDateOnly } from '../../lib/dates';
 import { computeAmount, formatAmount, formatHours } from '../../lib/timeEntries';
-import { AlertTriangle, Clock, FileText, ShieldCheck, ShieldAlert, UserPlus, X, Receipt, Link2, CheckCircle2, CreditCard, Wrench } from 'lucide-react';
+import { AlertTriangle, Clock, FileText, ShieldCheck, ShieldAlert, UserPlus, X, Receipt, Link2, CheckCircle2, CreditCard, Wrench, Download } from 'lucide-react';
 
 
 const ROLE_LABEL: Record<MatterPartyRole, string> = {
@@ -102,12 +103,34 @@ export function MatterDetailPanel({ matter, onClose }: { matter: Matter; onClose
     setAddPartyId('');
   };
 
-  const handleDownload = async (storagePath: string, fileName: string) => {
-    if (!isDevMode) {
-      const { data, error } = await supabase.storage.from('matter-documents').createSignedUrl(storagePath, 60);
-      if (error || !data) return;
-      window.open(data.signedUrl, '_blank');
+  const handleOpenInvoice = async (inv: Invoice) => {
+    if (isSupabaseConfigured && !inv.storage_path.startsWith('local/')) {
+      const { data, error } = await supabase.storage.from('matter-documents').createSignedUrl(inv.storage_path, 60);
+      if (data?.signedUrl) {
+        window.open(data.signedUrl, '_blank');
+        return;
+      }
     }
+    const entries = matterTimeEntries.filter(t => t.invoice_id === inv.id);
+    const clientName = clientParty?.name ?? 'Client';
+
+    const { blob } = generateInvoicePdf({
+      invoiceNumber: inv.invoice_number,
+      issuedDate: inv.issued_date,
+      dueDate: 'Due upon receipt',
+      firmName: firm?.name ?? 'Law Firm',
+      firmRegion: firm?.region ?? null,
+      firmCountry: firm?.country ?? null,
+      firmPhone: firm?.phone_answering_number ?? null,
+      lawpayUrl: firm?.lawpay_payment_page_url ?? null,
+      clientName,
+      matterTitle: matter.title,
+      currency: inv.currency,
+      locale: firm?.locale ?? 'en-US',
+      entries: entries.map(e => ({ id: e.id, date: e.date, description: e.description, duration_minutes: e.duration_minutes, rate: e.rate })),
+    });
+
+    window.open(URL.createObjectURL(blob), '_blank');
   };
 
   // LawPay hosted payment page link -- see lib/lawpay.ts. Real prerequisite,
@@ -347,12 +370,12 @@ export function MatterDetailPanel({ matter, onClose }: { matter: Matter; onClose
               {matterInvoices.map(inv => (
                 <div key={inv.id} className="bg-[var(--bg-tertiary)] rounded-lg px-2.5 py-2">
                   <button
-                    onClick={() => handleDownload(inv.storage_path, `${inv.invoice_number}.pdf`)}
-                    className="w-full flex items-center justify-between gap-2 text-sm text-left hover:opacity-80 transition-opacity"
+                    onClick={() => handleOpenInvoice(inv)}
+                    className="w-full flex items-center justify-between gap-2 text-sm text-left hover:opacity-80 transition-opacity group"
                   >
                     <span className="flex items-center gap-1.5 min-w-0 flex-wrap">
-                      <Receipt className="w-3.5 h-3.5 text-[var(--text-tertiary)] shrink-0" />
-                      <span className="truncate">{inv.invoice_number}</span>
+                      <Receipt className="w-3.5 h-3.5 text-[var(--accent-primary)] shrink-0" />
+                      <span className="truncate font-medium">{inv.invoice_number}</span>
                       {inv.status === 'paid' ? (
                         <span className="flex items-center gap-1 text-[10px] uppercase tracking-wider text-[var(--signal-positive)] bg-[var(--signal-positive)]/10 rounded-full px-1.5 py-0.5 shrink-0 font-medium">
                           <CheckCircle2 className="w-2.5 h-2.5" /> Paid
@@ -367,9 +390,12 @@ export function MatterDetailPanel({ matter, onClose }: { matter: Matter; onClose
                         </span>
                       )}
                     </span>
-                    <span className="text-xs text-[var(--text-tertiary)] shrink-0 ml-2">
-                      {formatDateOnly(inv.issued_date, locale, { day: 'numeric', month: 'short', year: 'numeric' })}
-                      {inv.total_amount !== null && <> · {formatAmount(inv.total_amount, inv.currency, locale)}</>}
+                    <span className="text-xs text-[var(--text-tertiary)] group-hover:text-[var(--text-primary)] shrink-0 ml-2 flex items-center gap-1.5 transition-colors">
+                      <span>{formatDateOnly(inv.issued_date, locale, { day: 'numeric', month: 'short', year: 'numeric' })}</span>
+                      {inv.total_amount !== null && <span>· {formatAmount(inv.total_amount, inv.currency, locale)}</span>}
+                      <span className="inline-flex items-center gap-0.5 text-[11px] font-medium text-[var(--accent-secondary)] bg-[var(--bg-secondary)] px-1.5 py-0.5 rounded border border-[var(--border-subtle)] ml-1">
+                        <FileText className="w-3 h-3" /> View PDF
+                      </span>
                     </span>
                   </button>
                   {inv.status === 'unpaid' && (

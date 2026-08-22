@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
 import { useStore } from '../../lib/store';
 import { useAuth } from '../../lib/auth';
-import { supabase } from '../../lib/supabase';
+import { supabase, isSupabaseConfigured } from '../../lib/supabase';
+import { generateInvoicePdf } from '../../lib/invoice';
 import {
   Clock, Plus, Download, Pencil, Trash2, Banknote, FileText,
   ExternalLink, UserPlus, User, CheckCircle2, AlertTriangle,
@@ -13,7 +14,7 @@ import { findUnbilledMatters } from '../../lib/riskSignals';
 import { toCsv, downloadCsv } from '../../lib/csv';
 import { LogTimeModal } from './LogTimeModal';
 import { MatterDetailPanel } from '../matters/MatterDetailPanel';
-import { TimeEntry, Matter } from '../../types';
+import { TimeEntry, Matter, Invoice } from '../../types';
 
 type ViewMode = 'grouped' | 'flat';
 
@@ -27,6 +28,7 @@ function TimeEntryRow({
   onEdit,
   onDelete,
   onSelectMatter,
+  onOpenInvoice,
 }: {
   t: TimeEntry;
   locale: string;
@@ -37,6 +39,7 @@ function TimeEntryRow({
   onEdit: () => void;
   onDelete: () => void;
   onSelectMatter?: () => void;
+  onOpenInvoice?: () => void;
 }) {
   const amount = computeAmount(t.duration_minutes, t.rate);
   const name = attorneyName(t.attorney_id);
@@ -75,9 +78,19 @@ function TimeEntryRow({
               </span>
             )}
             {t.invoice_id ? (
-              <span className="text-[10px] uppercase font-medium px-2 py-0.5 bg-[var(--signal-positive)]/15 text-[var(--signal-positive)] border border-[var(--signal-positive)]/30 rounded-full shrink-0 flex items-center gap-1">
-                <CheckCircle2 className="w-2.5 h-2.5" /> Invoiced
-              </span>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (onOpenInvoice) onOpenInvoice();
+                }}
+                className="text-[10px] uppercase font-medium px-2 py-0.5 bg-[var(--signal-positive)]/15 text-[var(--signal-positive)] hover:bg-[var(--signal-positive)]/25 border border-[var(--signal-positive)]/30 rounded-full shrink-0 flex items-center gap-1 transition-colors cursor-pointer"
+                title="Click to view/download generated invoice PDF"
+              >
+                <CheckCircle2 className="w-2.5 h-2.5" />
+                <span>Invoiced</span>
+                <Download className="w-2.5 h-2.5 opacity-70 ml-0.5" />
+              </button>
             ) : t.billable ? (
               <span className="text-[10px] uppercase font-medium px-2 py-0.5 bg-[var(--accent-primary)]/10 text-[var(--accent-primary)] border border-[var(--accent-primary)]/20 rounded-full shrink-0">
                 Unbilled
@@ -152,7 +165,7 @@ function TimeEntryRow({
 }
 
 export function TimeEntriesScreen() {
-  const { timeEntries, matters, attorneys, practiceAreas, firm, deleteTimeEntry, generateInvoice } = useStore();
+  const { timeEntries, matters, attorneys, practiceAreas, firm, deleteTimeEntry, generateInvoice, invoices, parties } = useStore();
   const { isDevMode } = useAuth();
   const locale = firm?.locale || 'en-US';
 
@@ -170,6 +183,49 @@ export function TimeEntriesScreen() {
 
   const unbilledTimeEntries = useMemo(() => timeEntries.filter(t => !t.invoice_id), [timeEntries]);
   const unbilled = useMemo(() => findUnbilledMatters(matters, unbilledTimeEntries), [matters, unbilledTimeEntries]);
+
+  const handleOpenInvoice = async (invoiceId: string | null | undefined) => {
+    if (!invoiceId) return;
+    const inv = invoices.find(i => i.id === invoiceId);
+    if (!inv) return;
+
+    if (isSupabaseConfigured && !inv.storage_path.startsWith('local/')) {
+      const { data } = await supabase.storage.from('matter-documents').createSignedUrl(inv.storage_path, 60);
+      if (data?.signedUrl) {
+        window.open(data.signedUrl, '_blank');
+        return;
+      }
+    }
+
+    const m = matters.find(x => x.id === inv.matter_id);
+    const entries = timeEntries.filter(t => t.invoice_id === inv.id);
+    const clientName = parties.find(p => p.id === m?.client_party_id)?.name ?? 'Client';
+
+    const { blob } = generateInvoicePdf({
+      invoiceNumber: inv.invoice_number,
+      issuedDate: inv.issued_date,
+      dueDate: 'Due upon receipt',
+      firmName: firm?.name ?? 'Law Firm',
+      firmRegion: firm?.region ?? null,
+      firmCountry: firm?.country ?? null,
+      firmPhone: firm?.phone_answering_number ?? null,
+      lawpayUrl: firm?.lawpay_payment_page_url ?? null,
+      clientName,
+      matterTitle: m?.title ?? 'Matter',
+      currency: inv.currency,
+      locale: firm?.locale ?? 'en-US',
+      entries: entries.map(e => ({ id: e.id, date: e.date, description: e.description, duration_minutes: e.duration_minutes, rate: e.rate })),
+    });
+
+    window.open(URL.createObjectURL(blob), '_blank');
+  };
+
+  const handleOpenLatestInvoiceForMatter = (matterId: string) => {
+    const matterInvoices = invoices.filter(i => i.matter_id === matterId).sort((a, b) => b.issued_date.localeCompare(a.issued_date));
+    if (matterInvoices.length > 0) {
+      handleOpenInvoice(matterInvoices[0].id);
+    }
+  };
 
   const handleGenerateInvoice = async (matterId: string) => {
     const isEligible = unbilled.some(u => u.matter.id === matterId);
@@ -413,8 +469,8 @@ export function TimeEntriesScreen() {
             }
 
             const isUnbilledFlagged = matter ? unbilled.some(u => u.matter.id === matter.id) : false;
-            const unbilledFlagItem = matter ? unbilled.find(u => u.matter.id === matter.id) : null;
             const allInvoiced = entries.length > 0 && entries.every(t => !!t.invoice_id);
+            const hasGeneratedInvoices = matter ? invoices.some(i => i.matter_id === matter.id) : false;
 
             return (
               <div key={mId || 'unlinked'} className="bg-[var(--bg-primary)] border border-[var(--border-subtle)] rounded-xl overflow-hidden shadow-sm">
@@ -439,9 +495,15 @@ export function TimeEntriesScreen() {
                           <AlertTriangle className="w-3 h-3" /> Ready to Invoice
                         </span>
                       ) : allInvoiced ? (
-                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-[var(--signal-positive)]/15 text-[var(--signal-positive)] border border-[var(--signal-positive)]/30 shrink-0">
-                          <CheckCircle2 className="w-3 h-3" /> All Invoiced
-                        </span>
+                        <button
+                          onClick={() => matter && handleOpenLatestInvoiceForMatter(matter.id)}
+                          className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-[var(--signal-positive)]/15 text-[var(--signal-positive)] hover:bg-[var(--signal-positive)]/25 border border-[var(--signal-positive)]/30 transition-colors shrink-0 cursor-pointer"
+                          title="Click to view/download generated invoice PDF"
+                        >
+                          <CheckCircle2 className="w-3 h-3" />
+                          <span>All Invoiced</span>
+                          <FileText className="w-3 h-3 ml-0.5" />
+                        </button>
                       ) : groupUnbilledEntries.length > 0 ? (
                         <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-[var(--accent-primary)]/10 text-[var(--accent-primary)] border border-[var(--accent-primary)]/20 shrink-0">
                           <Clock className="w-3 h-3" /> {formatHours(groupUnbilledMinutes)}h unbilled
@@ -480,6 +542,17 @@ export function TimeEntriesScreen() {
                       </button>
                     )}
 
+                    {matter && hasGeneratedInvoices && (
+                      <button
+                        onClick={() => handleOpenLatestInvoiceForMatter(matter.id)}
+                        className="h-8 px-2.5 flex items-center gap-1 text-xs font-medium border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] rounded transition-colors shrink-0"
+                        title="View or download the generated invoice PDF"
+                      >
+                        <FileText className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
+                        <span>View Invoice</span>
+                      </button>
+                    )}
+
                     {matter && (
                       <button
                         onClick={() => setSelectedMatterForDetail(matter)}
@@ -504,6 +577,7 @@ export function TimeEntriesScreen() {
                       attorneyName={attorneyName}
                       onEdit={() => setEditingEntry(t)}
                       onDelete={() => deleteTimeEntry(t.id)}
+                      onOpenInvoice={() => handleOpenInvoice(t.invoice_id)}
                     />
                   ))}
                 </div>
@@ -528,6 +602,7 @@ export function TimeEntriesScreen() {
                 onEdit={() => setEditingEntry(t)}
                 onDelete={() => deleteTimeEntry(t.id)}
                 onSelectMatter={m ? () => setSelectedMatterForDetail(m) : undefined}
+                onOpenInvoice={() => handleOpenInvoice(t.invoice_id)}
               />
             );
           })}
@@ -558,4 +633,3 @@ export function TimeEntriesScreen() {
     </div>
   );
 }
-

@@ -2,23 +2,16 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../../lib/store';
 import { findDocumentGaps } from '../../lib/riskSignals';
 import { useAuth } from '../../lib/auth';
-import { supabase } from '../../lib/supabase';
-import { FileText, Upload, Trash2, Download, History, Search, X, Eye, EyeOff, PenLine, RefreshCw, AlertTriangle } from 'lucide-react';
-import { LawDocument, DocumentSearchResult, SignatureRequest } from '../../types';
+import { supabase, isSupabaseConfigured } from '../../lib/supabase';
+import { generateInvoicePdf } from '../../lib/invoice';
+import { formatDateOnly } from '../../lib/dates';
+import { formatAmount } from '../../lib/timeEntries';
+import { FileText, Upload, Trash2, Download, History, Search, X, Eye, EyeOff, PenLine, RefreshCw, AlertTriangle, Receipt, CheckCircle2 } from 'lucide-react';
+import { LawDocument, DocumentSearchResult, SignatureRequest, Invoice } from '../../types';
 import { DocumentPreviewPanel } from './DocumentPreview';
 
-// search_documents' snippet uses plain-text §§B§§/§§E§§ markers, not
-// HTML tags (see migration 0017's comment on why: extracted_text is
-// arbitrary uploaded-file content, never safe to render as raw HTML).
-// Splits on those markers and renders each piece as plain React text —
-// the matched terms end up in <strong>, everything else stays inert
-// text, so nothing in the source document can ever be interpreted as
-// markup.
 function renderSnippet(snippet: string) {
   const parts = snippet.split(/§§B§§|§§E§§/);
-  // Odd indices are always the highlighted (matched) segments, since the
-  // string alternates plain/highlighted/plain/... after splitting on
-  // paired start/stop markers.
   return parts.map((part, i) => (i % 2 === 1 ? <strong key={i}>{part}</strong> : <span key={i}>{part}</span>));
 }
 
@@ -29,37 +22,27 @@ function formatBytes(bytes?: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-// A version chain's root id is either the document's own parent_document_id
-// (if it's a version of something) or its own id (if it's the root/only
-// copy) — see migration 0008. Grouping by this key never requires walking
-// a chain: every version already points straight at the root.
 function rootKey(d: LawDocument): string {
   return d.parent_document_id ?? d.id;
 }
 
 interface DocGroup {
   key: string;
-  all: LawDocument[]; // sorted most-recent-first
+  all: LawDocument[];
 }
 
 export function DocumentsScreen() {
-  const { documents, matters, uploadDocument, deleteDocument, setDocumentClientVisible, signatureRequests, sendForSignature, refreshSignatureStatus, firm } = useStore();
+  const { documents, matters, uploadDocument, deleteDocument, setDocumentClientVisible, signatureRequests, sendForSignature, refreshSignatureStatus, firm, invoices, timeEntries, parties } = useStore();
   const locale = firm?.locale || 'en-US';
   const { isDevMode } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [matterFilter, setMatterFilter] = useState<string>('all');
+  const [activeTab, setActiveTab] = useState<'documents' | 'invoices'>('documents');
   const [uploadTarget, setUploadTarget] = useState<string>('');
   const [uploading, setUploading] = useState(false);
   const [pendingUpload, setPendingUpload] = useState<{ file: File; matterId: string | null; existing: LawDocument } | null>(null);
   const [previewDoc, setPreviewDoc] = useState<LawDocument | null>(null);
 
-  // Content search — filenames AND extracted text, via the
-  // search_documents Postgres function (migration 0017), not client-side
-  // filtering: extracted_text can be long and isn't otherwise loaded
-  // per-row in the list view. Debounced so every keystroke doesn't fire
-  // a query. A non-empty query switches the whole screen into "search
-  // results" mode instead of the normal matter-filtered/grouped view —
-  // the two don't compose (searching already spans all matters).
   const [signTarget, setSignTarget] = useState<LawDocument | null>(null);
   const [signEmail, setSignEmail] = useState('');
   const [signName, setSignName] = useState('');
@@ -87,17 +70,16 @@ export function DocumentsScreen() {
     () => matterFilter === 'all' ? documents : documents.filter(d => d.matter_id === matterFilter),
     [documents, matterFilter]
   );
+
+  const filteredInvoices = useMemo(
+    () => matterFilter === 'all' ? invoices : invoices.filter(i => i.matter_id === matterFilter),
+    [invoices, matterFilter]
+  );
+
   const matterTitle = (id: string | null) => matters.find(m => m.id === id)?.title ?? 'Unfiled';
-  // Firm-relative, filename-derived -- see findDocumentGaps. Computed once
-  // here (not just inside the banner IIFE below) so the document preview
-  // panel can also surface a matter's gap finding inline with the
-  // specific document it's about, per the companion doc-gap-intelligence
-  // task.
   const documentGaps = useMemo(() => findDocumentGaps(matters, documents), [matters, documents]);
   const gapHintFor = (matterId: string | null) => matterId ? documentGaps.find(g => g.matter.id === matterId)?.detail : undefined;
 
-  // Group by version chain, most-recent-first within a group, groups
-  // themselves ordered by their most recent member's upload time.
   const groups = useMemo<DocGroup[]>(() => {
     const byKey = new Map<string, LawDocument[]>();
     for (const d of filtered) {
@@ -123,24 +105,20 @@ export function DocumentsScreen() {
   const handleFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const matterId = uploadTarget || null;
-
-    // Same file name already on file for this matter? Offer to link as a
-    // new version instead of silently creating a second, unrelated
-    // document — never forced, always a clear choice.
-    const existing = documents.find(d => d.matter_id === matterId && d.file_name === file.name);
-    if (existing) {
-      setPendingUpload({ file, matterId, existing });
+    const targetId = uploadTarget || null;
+    const sameName = documents.find(d => (d.matter_id === targetId || (!d.matter_id && !targetId)) && d.file_name.toLowerCase() === file.name.toLowerCase());
+    if (sameName) {
+      setPendingUpload({ file, matterId: targetId, existing: sameName });
       return;
     }
-    await doUpload(file, matterId, null);
+    await doUpload(file, targetId, null);
   };
 
-  const resolvePendingChoice = async (linkAsVersion: boolean) => {
+  const resolvePendingChoice = async (asNewVersion: boolean) => {
     if (!pendingUpload) return;
     const { file, matterId, existing } = pendingUpload;
     setPendingUpload(null);
-    await doUpload(file, matterId, linkAsVersion ? rootKey(existing) : null);
+    await doUpload(file, matterId, asNewVersion ? rootKey(existing) : null);
   };
 
   const handleDownload = async (storagePath: string, fileName: string) => {
@@ -151,52 +129,91 @@ export function DocumentsScreen() {
     }
   };
 
-  // Latest attempt wins for display purposes. signature_requests is
-  // ordered created_at desc by the store, so the first match is newest —
-  // a document declined once and re-sent should read as "awaiting", not
-  // stay stuck on the older declined attempt.
-  const latestSignature = (documentId: string): SignatureRequest | undefined =>
-    signatureRequests.find(r => r.document_id === documentId);
+  const handleOpenInvoice = async (inv: Invoice) => {
+    if (isSupabaseConfigured && !inv.storage_path.startsWith('local/')) {
+      const { data } = await supabase.storage.from('matter-documents').createSignedUrl(inv.storage_path, 60);
+      if (data?.signedUrl) {
+        window.open(data.signedUrl, '_blank');
+        return;
+      }
+    }
 
-  const SIGNATURE_LABEL: Record<SignatureRequest['status'], { text: string; color: string }> = {
-    sent:     { text: 'Awaiting signature', color: 'var(--signal-warning)' },
-    signed:   { text: 'Signed',             color: 'var(--signal-positive)' },
-    declined: { text: 'Declined',           color: 'var(--signal-negative)' },
+    const m = matters.find(x => x.id === inv.matter_id);
+    const entries = timeEntries.filter(t => t.invoice_id === inv.id);
+    const clientName = parties.find(p => p.id === m?.client_party_id)?.name ?? 'Client';
+
+    const { blob } = generateInvoicePdf({
+      invoiceNumber: inv.invoice_number,
+      issuedDate: inv.issued_date,
+      dueDate: 'Due upon receipt',
+      firmName: firm?.name ?? 'Law Firm',
+      firmRegion: firm?.region ?? null,
+      firmCountry: firm?.country ?? null,
+      firmPhone: firm?.phone_answering_number ?? null,
+      lawpayUrl: firm?.lawpay_payment_page_url ?? null,
+      clientName,
+      matterTitle: m?.title ?? 'Matter',
+      currency: inv.currency,
+      locale: firm?.locale ?? 'en-US',
+      entries: entries.map(e => ({ id: e.id, date: e.date, description: e.description, duration_minutes: e.duration_minutes, rate: e.rate })),
+    });
+
+    window.open(URL.createObjectURL(blob), '_blank');
   };
 
-  const handleRefreshSignature = async (id: string) => {
-    setRefreshingSig(id);
-    await refreshSignatureStatus(id);
-    setRefreshingSig(null);
+  const latestSignature = (documentId: string): SignatureRequest | undefined => {
+    return signatureRequests
+      .filter(s => s.document_id === documentId)
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
   };
 
   const handleSendForSignature = async () => {
     if (!signTarget || !signEmail.trim()) return;
     setSignSending(true);
-    const res = await sendForSignature(signTarget.id, signEmail.trim(), signName.trim() || undefined);
+    await sendForSignature(signTarget.id, signEmail.trim(), signName.trim() || undefined);
     setSignSending(false);
-    if (!res.error) { setSignTarget(null); setSignEmail(''); setSignName(''); }
+    setSignTarget(null);
   };
 
-  const renderRow = (d: LawDocument, isSecondary: boolean) => (
+  const handleRefreshSignature = async (requestId: string) => {
+    setRefreshingSig(requestId);
+    await refreshSignatureStatus(requestId);
+    setRefreshingSig(null);
+  };
+
+  const SIGNATURE_LABEL: Record<SignatureRequest['status'], { text: string; color: string }> = {
+    pending: { text: 'Preparing signature request…', color: 'var(--text-tertiary)' },
+    sent: { text: 'Out for signature', color: 'var(--signal-warning)' },
+    signed: { text: 'Signed', color: 'var(--signal-positive)' },
+    declined: { text: 'Declined by recipient', color: 'var(--signal-negative)' },
+    canceled: { text: 'Signature request canceled', color: 'var(--text-tertiary)' },
+  };
+
+  const renderRow = (d: LawDocument, isSubVersion = false) => (
     <div
       key={d.id}
       onClick={() => setPreviewDoc(d)}
       role="button"
       tabIndex={0}
-      onKeyDown={e => e.key === 'Enter' && setPreviewDoc(d)}
-      className={`flex items-center gap-3 cursor-pointer hover:bg-[var(--bg-tertiary)]/40 transition-colors ${isSecondary ? 'py-2 pl-8 pr-3 opacity-60' : 'p-3'}`}
+      onKeyDown={e => { if (e.key === 'Enter') setPreviewDoc(d); }}
+      className={`flex items-center gap-3 p-3 transition-colors cursor-pointer hover:bg-[var(--bg-tertiary)] ${
+        isSubVersion ? 'pl-8 bg-[var(--bg-secondary)]/50 text-xs' : ''
+      }`}
     >
-      <div className={`rounded-lg bg-[var(--bg-tertiary)] flex items-center justify-center shrink-0 ${isSecondary ? 'w-7 h-7' : 'w-9 h-9'}`}>
-        <FileText className={isSecondary ? 'w-3.5 h-3.5' : 'w-4 h-4'} />
+      <div className={`rounded-lg flex items-center justify-center shrink-0 ${isSubVersion ? 'w-7 h-7 bg-[var(--bg-tertiary)]' : 'w-9 h-9 bg-[var(--bg-tertiary)]'}`}>
+        <FileText className={isSubVersion ? 'w-3.5 h-3.5 text-[var(--text-tertiary)]' : 'w-4 h-4 text-[var(--text-primary)]'} />
       </div>
       <div className="flex-1 min-w-0">
-        <div className={`font-medium truncate ${isSecondary ? 'text-xs' : 'text-sm'}`}>{d.file_name}</div>
-        <div className="text-xs text-[var(--text-tertiary)]">
-          {!isSecondary && `${matterTitle(d.matter_id)} · `}{formatBytes(d.file_size)} · {new Date(d.created_at).toLocaleDateString(locale, { day: 'numeric', month: 'short', year: 'numeric' })}
-          {d.extraction_status === 'pending' && <> · Indexing…</>}
-          {d.extraction_status === 'failed' && <> · <span className="text-[var(--signal-warning)]">Not indexed</span></>}
-          {d.client_visible && <> · <span className="text-[var(--signal-positive)]">Shared with client</span></>}
+        <div className="flex items-center gap-2">
+          <span className={`font-medium truncate ${isSubVersion ? 'text-xs' : 'text-sm'}`}>{d.file_name}</span>
+          {d.version > 1 && (
+            <span className="text-[10px] uppercase font-mono px-1.5 py-0.2 bg-[var(--bg-tertiary)] text-[var(--text-tertiary)] rounded shrink-0">
+              v{d.version}
+            </span>
+          )}
+        </div>
+        <div className="text-xs text-[var(--text-tertiary)] truncate">
+          {matterTitle(d.matter_id)} · {formatBytes(d.file_size)}
           {(() => {
             const sig = latestSignature(d.id);
             if (!sig) return null;
@@ -208,7 +225,6 @@ export function DocumentsScreen() {
       {d.matter_id && (
         <button
           onClick={e => { e.stopPropagation(); setDocumentClientVisible(d.id, !d.client_visible); }}
-          title={d.client_visible ? 'Shared with the client — click to stop sharing' : 'Not shared with the client — click to share on their portal'}
           className={`w-8 h-8 flex items-center justify-center transition-colors ${d.client_visible ? 'text-[var(--signal-positive)] hover:text-[var(--signal-negative)]' : 'text-[var(--text-tertiary)] hover:text-[var(--text-primary)]'}`}
         >
           {d.client_visible ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
@@ -216,16 +232,11 @@ export function DocumentsScreen() {
       )}
       {d.matter_id && (() => {
         const sig = latestSignature(d.id);
-        // Awaiting: offer a status check instead of a second send —
-        // sending the same document twice while one request is still open
-        // is almost never what someone means to do, and Dropbox Sign
-        // would happily create a duplicate request if asked.
         if (sig && sig.status === 'sent') {
           return (
             <button
               onClick={e => { e.stopPropagation(); handleRefreshSignature(sig.id); }}
               disabled={refreshingSig === sig.id}
-              title={`Out for signature with ${sig.recipient_email} — click to check status`}
               className="w-8 h-8 flex items-center justify-center text-[var(--signal-warning)] hover:text-[var(--text-primary)] transition-colors disabled:opacity-40"
             >
               <RefreshCw className={`w-4 h-4 ${refreshingSig === sig.id ? 'animate-spin' : ''}`} />
@@ -235,7 +246,6 @@ export function DocumentsScreen() {
         return (
           <button
             onClick={e => { e.stopPropagation(); setSignTarget(d); setSignEmail(''); setSignName(''); }}
-            title={sig?.status === 'signed' ? 'Already signed — send again for a new signature' : 'Send this document for e-signature'}
             className="w-8 h-8 flex items-center justify-center text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors"
           >
             <PenLine className="w-4 h-4" />
@@ -253,19 +263,15 @@ export function DocumentsScreen() {
 
   return (
     <div>
-      <h2 className="text-xl font-medium mb-1">Documents</h2>
-      <p className="text-sm text-[var(--text-secondary)] mb-6">Every file attached to a matter, in one place.</p>
+      <h2 className="text-xl font-medium mb-1">Documents &amp; Files</h2>
+      <p className="text-sm text-[var(--text-secondary)] mb-6">Manage matter files, client uploads, and generated billing invoices.</p>
 
-{(() => {
+      {(() => {
         const gaps = documentGaps.slice(0, 3);
         if (gaps.length === 0) return null;
         return (
           <div className="mb-6 space-y-2">
             {gaps.map(g => (
-              // Clicking a gap finding filters straight to the matter it's
-              // about, rather than just naming it in a banner divorced
-              // from the actual document list -- "attached to the
-              // specific matter/document group it's about."
               <button
                 key={g.matter.id}
                 onClick={() => { setSearchQuery(''); setMatterFilter(g.matter.id); }}
@@ -280,6 +286,7 @@ export function DocumentsScreen() {
           </div>
         );
       })()}
+
       <div className="flex flex-wrap items-center gap-2 mb-6 bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg p-4">
         <select
           value={uploadTarget}
@@ -304,10 +311,6 @@ export function DocumentsScreen() {
           <PenLine className="w-4 h-4 text-[var(--accent-secondary)] shrink-0 mt-0.5" />
           <div className="flex-1 min-w-0">
             <div className="text-sm font-medium mb-1">Send "{signTarget.file_name}" for signature</div>
-            <p className="text-xs text-[var(--text-secondary)] mb-3">
-              The recipient gets an email from Dropbox Sign. When they sign, the executed copy is
-              filed here as a new version of this document — the original is never replaced.
-            </p>
             <div className="flex flex-col sm:flex-row gap-2 mb-3">
               <input
                 type="email"
@@ -347,8 +350,8 @@ export function DocumentsScreen() {
         <div className="flex items-start gap-3 bg-[var(--bg-secondary)] border border-[var(--accent-secondary)]/40 rounded-lg p-4 mb-6">
           <History className="w-4 h-4 text-[var(--accent-secondary)] shrink-0 mt-0.5" />
           <div className="flex-1 min-w-0">
-            <div className="text-sm font-medium mb-1">"{pendingUpload.file.name}" already exists in {matterTitle(pendingUpload.matterId)}</div>
-            <p className="text-xs text-[var(--text-secondary)] mb-3">Link this upload as a new version of that document, or keep them as two separate files?</p>
+            <div className="text-sm font-medium mb-1">"{pendingUpload.file.name}" already exists</div>
+            <p className="text-xs text-[var(--text-secondary)] mb-3">Link this upload as a new version, or keep as a separate file?</p>
             <div className="flex gap-2">
               <button
                 onClick={() => resolvePendingChoice(true)}
@@ -373,9 +376,6 @@ export function DocumentsScreen() {
         </div>
       )}
 
-      {/* Content search — filenames + extracted document text (see
-          migration 0017). Spans every matter at once, so it's a separate
-          mode rather than another filter alongside the matter dropdown. */}
       <div className="relative mb-4">
         <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)] pointer-events-none" />
         <input
@@ -431,57 +431,121 @@ export function DocumentsScreen() {
         )
       ) : (
         <>
-          {/* Matter filter — a <select>, same pattern as TimeEntriesScreen's
-              matter filter. This used to be one pill button per matter, which
-              was fine at a handful of matters but genuinely unusable at real
-              volume (62+ individual pills wrapping across many lines). */}
-          <div className="mb-4">
-            <label className="text-[10px] uppercase font-mono tracking-wider text-[var(--text-tertiary)] block mb-1">Matter</label>
-            <select
-              value={matterFilter}
-              onChange={e => setMatterFilter(e.target.value)}
-              className="h-9 px-3 bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded text-sm focus:outline-none w-full sm:w-72"
-            >
-              <option value="all">All matters</option>
-              {matters.map(m => <option key={m.id} value={m.id}>{m.title}</option>)}
-            </select>
+          <div className="flex flex-wrap items-end justify-between gap-3 mb-4">
+            <div>
+              <label className="text-[10px] uppercase font-mono tracking-wider text-[var(--text-tertiary)] block mb-1">Matter</label>
+              <select
+                value={matterFilter}
+                onChange={e => setMatterFilter(e.target.value)}
+                className="h-9 px-3 bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded text-sm focus:outline-none w-full sm:w-72"
+              >
+                <option value="all">All matters</option>
+                {matters.map(m => <option key={m.id} value={m.id}>{m.title}</option>)}
+              </select>
+            </div>
+
+            <div className="flex items-center bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] p-0.5 rounded-lg">
+              <button
+                onClick={() => setActiveTab('documents')}
+                className={`h-8 px-3 text-xs font-medium rounded flex items-center gap-1.5 transition-colors ${
+                  activeTab === 'documents'
+                    ? 'bg-[var(--bg-primary)] text-[var(--text-primary)] shadow-sm'
+                    : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                }`}
+              >
+                <FileText className="w-3.5 h-3.5" /> Matter Documents ({filtered.length})
+              </button>
+              <button
+                onClick={() => setActiveTab('invoices')}
+                className={`h-8 px-3 text-xs font-medium rounded flex items-center gap-1.5 transition-colors ${
+                  activeTab === 'invoices'
+                    ? 'bg-[var(--bg-primary)] text-[var(--text-primary)] shadow-sm'
+                    : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                }`}
+              >
+                <Receipt className="w-3.5 h-3.5 text-[var(--accent-primary)]" /> Generated Invoices ({filteredInvoices.length})
+              </button>
+            </div>
           </div>
 
-          {groups.length === 0 ? (
-            <div className="text-sm text-[var(--text-tertiary)] py-8 text-center">No documents yet.</div>
-          ) : (
-            <div className="space-y-2">
-              {(() => {
-                // Also flag the gap directly on the specific document
-                // group it's about, once per matter -- the top banner
-                // says "this matter has a gap," this says "here is that
-                // matter's actual document list." Shown once, on the
-                // first (most recent) group for that matter, not
-                // repeated on every group of theirs.
-                const flaggedMatters = new Set<string>();
-                return groups.map(g => {
-                  const matterId = g.all[0].matter_id;
-                  const gap = matterId && !flaggedMatters.has(matterId) ? documentGaps.find(dg => dg.matter.id === matterId) : undefined;
-                  if (gap) flaggedMatters.add(matterId!);
-                  return (
-                    <div key={g.key} className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg divide-y divide-[var(--border-subtle)]/60">
-                      {gap && (
-                        <div className="flex items-center gap-1.5 px-3 py-2 text-[11px] text-[var(--signal-warning)] bg-[var(--signal-warning)]/5">
-                          <AlertTriangle className="w-3 h-3 shrink-0" /> {gap.detail}
+          {activeTab === 'invoices' ? (
+            filteredInvoices.length === 0 ? (
+              <div className="text-sm text-[var(--text-tertiary)] py-12 text-center border border-dashed border-[var(--border-subtle)] rounded-lg bg-[var(--bg-secondary)]">
+                No generated invoices match this filter.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {filteredInvoices.map(inv => (
+                  <div key={inv.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-secondary)] shadow-sm hover:border-[var(--border-strong)] transition-all">
+                    <div className="flex items-start gap-3 flex-1 min-w-0">
+                      <div className="p-2 bg-[var(--accent-primary)]/10 text-[var(--accent-primary)] rounded-md shrink-0 mt-0.5">
+                        <Receipt className="w-4 h-4" />
+                      </div>
+                      <div className="flex-1 min-w-0 space-y-0.5">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-sm font-semibold text-[var(--text-primary)]">{inv.invoice_number}</span>
+                          <span className="text-xs text-[var(--text-tertiary)]">·</span>
+                          <span className="text-xs text-[var(--text-secondary)] font-medium truncate">{matterTitle(inv.matter_id)}</span>
+                          {inv.status === 'paid' ? (
+                            <span className="text-[10px] uppercase font-medium px-2 py-0.5 bg-[var(--signal-positive)]/15 text-[var(--signal-positive)] border border-[var(--signal-positive)]/30 rounded-full shrink-0 flex items-center gap-1">
+                              <CheckCircle2 className="w-2.5 h-2.5" /> Paid
+                            </span>
+                          ) : (
+                            <span className="text-[10px] uppercase font-medium px-2 py-0.5 bg-[var(--accent-primary)]/10 text-[var(--accent-primary)] border border-[var(--accent-primary)]/20 rounded-full shrink-0">
+                              Unpaid
+                            </span>
+                          )}
                         </div>
-                      )}
-                      {renderRow(g.all[0], false)}
-                      {g.all.length > 1 && (
-                        <div className="flex items-center gap-1.5 px-3 pt-2 text-[10px] uppercase tracking-wider text-[var(--text-tertiary)]">
-                          <History className="w-3 h-3" /> {g.all.length - 1} earlier version{g.all.length - 1 === 1 ? '' : 's'}
+                        <div className="text-xs text-[var(--text-tertiary)]">
+                          Issued {formatDateOnly(inv.issued_date, locale, { day: 'numeric', month: 'short', year: 'numeric' })}
+                          {inv.total_amount !== null && <> · <span className="font-mono font-medium text-[var(--text-primary)]">{formatAmount(inv.total_amount, inv.currency, locale)}</span></>}
                         </div>
-                      )}
-                      {g.all.slice(1).map(d => renderRow(d, true))}
+                      </div>
                     </div>
-                  );
-                });
-              })()}
-            </div>
+                    <div className="flex items-center justify-end shrink-0">
+                      <button
+                        onClick={() => handleOpenInvoice(inv)}
+                        className="h-8 px-3 flex items-center gap-1.5 text-xs font-medium bg-[var(--text-primary)] text-[var(--bg-primary)] rounded hover:opacity-90 transition-opacity"
+                        title="Open or download invoice PDF"
+                      >
+                        <Download className="w-3.5 h-3.5" /> View PDF
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )
+          ) : (
+            groups.length === 0 ? (
+              <div className="text-sm text-[var(--text-tertiary)] py-8 text-center">No documents yet.</div>
+            ) : (
+              <div className="space-y-2">
+                {(() => {
+                  const flaggedMatters = new Set<string>();
+                  return groups.map(g => {
+                    const matterId = g.all[0].matter_id;
+                    const gap = matterId && !flaggedMatters.has(matterId) ? documentGaps.find(dg => dg.matter.id === matterId) : undefined;
+                    if (gap) flaggedMatters.add(matterId!);
+                    return (
+                      <div key={g.key} className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg divide-y divide-[var(--border-subtle)]/60">
+                        {gap && (
+                          <div className="flex items-center gap-1.5 px-3 py-2 text-[11px] text-[var(--signal-warning)] bg-[var(--signal-warning)]/5">
+                            <AlertTriangle className="w-3 h-3 shrink-0" /> {gap.detail}
+                          </div>
+                        )}
+                        {renderRow(g.all[0], false)}
+                        {g.all.length > 1 && (
+                          <div className="flex items-center gap-1.5 px-3 pt-2 text-[10px] uppercase tracking-wider text-[var(--text-tertiary)]">
+                            <History className="w-3 h-3" /> {g.all.length - 1} earlier version{g.all.length - 1 === 1 ? '' : 's'}
+                          </div>
+                        )}
+                        {g.all.slice(1).map(d => renderRow(d, true))}
+                      </div>
+                    );
+                  });
+                })()}
+              </div>
+            )
           )}
         </>
       )}
