@@ -123,41 +123,34 @@ function TimeEntryRow({
             )}
           </div>
         </div>
-      </div>
 
-      <div className="flex items-center justify-between sm:justify-end gap-4 shrink-0 border-t sm:border-t-0 border-[var(--border-subtle)] pt-2 sm:pt-0">
-        <div className="text-right shrink-0">
-          <div className="text-sm font-mono font-semibold text-[var(--text-primary)]">
-            {formatHours(t.duration_minutes)} hrs
+        <div className="flex flex-col items-end gap-2 shrink-0">
+          <div className="text-sm font-mono font-medium text-[var(--text-primary)]">
+            {amount !== null ? formatAmount(amount, entryCurrency, locale) : '—'}
           </div>
-          <div className="text-xs text-[var(--text-tertiary)] font-mono">
-            {amount != null ? formatAmount(amount, t.currency ?? currency, locale) : '—'}
-          </div>
-        </div>
 
-        <div className="flex items-center gap-1 shrink-0">
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onEdit();
-            }}
-            className="w-8 h-8 flex items-center justify-center rounded text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
-            aria-label="Edit time entry"
-            title="Edit time entry"
-          >
-            <Pencil className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onDelete();
-            }}
-            className="w-8 h-8 flex items-center justify-center rounded text-[var(--text-tertiary)] hover:text-[var(--signal-negative)] hover:bg-[var(--signal-negative)]/10 transition-colors"
-            aria-label="Delete time entry"
-            title="Delete time entry"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-          </button>
+          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            <button
+              onClick={e => {
+                e.stopPropagation();
+                onEdit();
+              }}
+              className="p-1 text-[var(--text-tertiary)] hover:text-[var(--text-primary)] rounded hover:bg-[var(--bg-tertiary)] transition-colors"
+              title="Edit entry"
+            >
+              <Pencil className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={e => {
+                e.stopPropagation();
+                onDelete();
+              }}
+              className="p-1 text-[var(--text-tertiary)] hover:text-[var(--signal-negative)] rounded hover:bg-[var(--bg-tertiary)] transition-colors"
+              title="Delete entry"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -165,8 +158,11 @@ function TimeEntryRow({
 }
 
 export function TimeEntriesScreen() {
-  const { timeEntries, matters, attorneys, practiceAreas, firm, deleteTimeEntry, generateInvoice, invoices, parties } = useStore();
+  const {
+    timeEntries, matters, attorneys, deleteTimeEntry, firm, invoices, parties, generateInvoice, sendMatterCommunication
+  } = useStore();
   const { isDevMode } = useAuth();
+  const { showToast } = useToast();
   const locale = firm?.locale || 'en-US';
 
   const [matterFilter, setMatterFilter] = useState('all');
@@ -176,6 +172,7 @@ export function TimeEntriesScreen() {
   const [showLog, setShowLog] = useState(false);
   const [editingEntry, setEditingEntry] = useState<TimeEntry | null>(null);
   const [invoicingMatterId, setInvoicingMatterId] = useState<string | null>(null);
+  const [issuingInvoiceId, setIssuingInvoiceId] = useState<string | null>(null);
   const [selectedMatterForDetail, setSelectedMatterForDetail] = useState<Matter | null>(null);
 
   const matterTitle = (id: string) => matters.find(m => m.id === id)?.title ?? 'Unlinked / Standalone';
@@ -184,19 +181,7 @@ export function TimeEntriesScreen() {
   const unbilledTimeEntries = useMemo(() => timeEntries.filter(t => !t.invoice_id), [timeEntries]);
   const unbilled = useMemo(() => findUnbilledMatters(matters, unbilledTimeEntries), [matters, unbilledTimeEntries]);
 
-  const handleOpenInvoice = async (invoiceId: string | null | undefined) => {
-    if (!invoiceId) return;
-    const inv = invoices.find(i => i.id === invoiceId);
-    if (!inv) return;
-
-    if (isSupabaseConfigured && !inv.storage_path.startsWith('local/')) {
-      const { data } = await supabase.storage.from('matter-documents').createSignedUrl(inv.storage_path, 60);
-      if (data?.signedUrl) {
-        window.open(data.signedUrl, '_blank');
-        return;
-      }
-    }
-
+  const getInvoicePdfBlob = (inv: Invoice): Blob => {
     const m = matters.find(x => x.id === inv.matter_id);
     const entries = timeEntries.filter(t => t.invoice_id === inv.id);
     const clientName = parties.find(p => p.id === m?.client_party_id)?.name ?? 'Client';
@@ -216,15 +201,79 @@ export function TimeEntriesScreen() {
       locale: firm?.locale ?? 'en-US',
       entries: entries.map(e => ({ id: e.id, date: e.date, description: e.description, duration_minutes: e.duration_minutes, rate: e.rate })),
     });
+    return blob;
+  };
 
+  const handleViewInvoice = async (inv: Invoice) => {
+    if (isSupabaseConfigured && !inv.storage_path.startsWith('local/')) {
+      const { data } = await supabase.storage.from('matter-documents').createSignedUrl(inv.storage_path, 60);
+      if (data?.signedUrl) {
+        window.open(data.signedUrl, '_blank');
+        return;
+      }
+    }
+    const blob = getInvoicePdfBlob(inv);
     window.open(URL.createObjectURL(blob), '_blank');
   };
 
-  const handleOpenLatestInvoiceForMatter = (matterId: string) => {
-    const matterInvoices = invoices.filter(i => i.matter_id === matterId).sort((a, b) => b.issued_date.localeCompare(a.issued_date));
-    if (matterInvoices.length > 0) {
-      handleOpenInvoice(matterInvoices[0].id);
+  const handleDownloadInvoice = async (inv: Invoice) => {
+    let blobToDownload: Blob | null = null;
+    if (isSupabaseConfigured && !inv.storage_path.startsWith('local/')) {
+      const { data } = await supabase.storage.from('matter-documents').download(inv.storage_path);
+      if (data) blobToDownload = data;
     }
+    if (!blobToDownload) {
+      blobToDownload = getInvoicePdfBlob(inv);
+    }
+    const url = URL.createObjectURL(blobToDownload);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${inv.invoice_number}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
+  const handleIssueInvoice = async (inv: Invoice) => {
+    const matter = matters.find(m => m.id === inv.matter_id);
+    if (!matter) return;
+    const clientParty = parties.find(p => p.id === matter.client_party_id);
+    const clientEmail = clientParty?.email?.trim();
+
+    if (!clientEmail) {
+      showToast('error', `Cannot issue invoice: No email address on file for client ${clientParty?.name || 'Party'}.`);
+      return;
+    }
+
+    setIssuingInvoiceId(inv.id);
+
+    let pdfUrl = '';
+    if (isSupabaseConfigured && !inv.storage_path.startsWith('local/')) {
+      const { data } = await supabase.storage.from('matter-documents').createSignedUrl(inv.storage_path, 86400 * 7);
+      if (data?.signedUrl) pdfUrl = data.signedUrl;
+    }
+
+    const subject = `Invoice ${inv.invoice_number} - ${matter.title}`;
+    const body = `Dear ${clientParty?.name || 'Client'},\n\nPlease find attached Invoice ${inv.invoice_number} for ${matter.title}.\n\nTotal Amount: ${formatAmount(inv.total_amount, inv.currency, locale)}\nIssued Date: ${inv.issued_date}\n${pdfUrl ? `\nInvoice PDF Link:\n${pdfUrl}\n` : ''}\nThank you,\n${firm?.name || 'Law Firm'}`;
+
+    const res = await sendMatterCommunication({
+      matter_id: matter.id,
+      sent_to: clientEmail,
+      subject,
+      body,
+    });
+
+    setIssuingInvoiceId(null);
+    if (!res?.error) {
+      showToast('success', `Invoice ${inv.invoice_number} issued to ${clientEmail}.`);
+    }
+  };
+
+  const handleOpenInvoiceById = (invoiceId: string | null | undefined) => {
+    if (!invoiceId) return;
+    const inv = invoices.find(i => i.id === invoiceId);
+    if (inv) handleViewInvoice(inv);
   };
 
   const handleGenerateInvoice = async (matterId: string) => {
@@ -263,150 +312,161 @@ export function TimeEntriesScreen() {
       groupsMap.get(key)!.entries.push(entry);
     }
 
-    return Array.from(groupsMap.values());
+    return Array.from(groupsMap.entries()).map(([key, data]) => ({
+      mId: key,
+      matter: data.matter,
+      entries: data.entries,
+    }));
   }, [filtered, matters]);
 
-  const totals = useMemo(() => {
-    let totalMinutes = 0, billableMinutes = 0;
-    const billableByCurrency = new Map<string, number>();
+  const grandTotals = useMemo(() => {
+    let totalMins = 0;
+    let unbilledMins = 0;
+    const unbilledByCurrency = new Map<string, number>();
+
     for (const t of filtered) {
-      totalMinutes += t.duration_minutes;
-      if (t.billable) {
-        billableMinutes += t.duration_minutes;
-        const amount = computeAmount(t.duration_minutes, t.rate);
-        if (amount !== null) {
-          const key = t.currency ?? currency;
-          billableByCurrency.set(key, (billableByCurrency.get(key) ?? 0) + amount);
+      const mins = t.duration_minutes || 0;
+      totalMins += mins;
+      if (!t.invoice_id && t.billable) {
+        unbilledMins += mins;
+        const amt = computeAmount(mins, t.rate);
+        if (amt !== null) {
+          const code = t.currency ?? currency;
+          unbilledByCurrency.set(code, (unbilledByCurrency.get(code) ?? 0) + amt);
         }
       }
     }
-    return { totalMinutes, billableMinutes, billableByCurrency };
+
+    return { totalMins, unbilledMins, unbilledByCurrency };
   }, [filtered, currency]);
 
-  const handleExport = () => {
-    const headers = ['Date', 'Matter', 'Attorney', 'Duration (hrs)', 'Rate', 'Amount', 'Billable', 'Description'];
-    const rows = filtered.map(t => {
-      const amount = computeAmount(t.duration_minutes, t.rate);
-      return [
-        t.date,
-        matterTitle(t.matter_id),
-        attorneyName(t.attorney_id) ?? 'Unassigned',
-        formatHours(t.duration_minutes),
-        t.rate != null ? t.rate.toFixed(2) : '',
-        amount != null ? amount.toFixed(2) : '',
-        t.billable ? 'Yes' : 'No',
-        t.description ?? '',
-      ];
-    });
-    const csv = toCsv(headers, rows);
-    const scope = matterFilter === 'all' ? 'all-matters' : matterTitle(matterFilter).toLowerCase().replace(/[^a-z0-9]+/g, '-');
-    downloadCsv(`time-entries_${scope}_${new Date().toISOString().slice(0, 10)}.csv`, csv);
+  const handleExportCsv = () => {
+    const rows = filtered.map(t => ({
+      Date: t.date,
+      Matter: matterTitle(t.matter_id),
+      Attorney: attorneyName(t.assigned_attorney_id) ?? '',
+      'Duration (hours)': formatHours(t.duration_minutes),
+      'Rate/hr': t.rate ?? '',
+      Currency: t.currency ?? currency,
+      Amount: computeAmount(t.duration_minutes, t.rate) ?? '',
+      Billable: t.billable ? 'Yes' : 'No',
+      Invoiced: t.invoice_id ? 'Yes' : 'No',
+      Description: t.description || '',
+    }));
+    downloadCsv(`time-entries-${new Date().toISOString().slice(0, 10)}.csv`, toCsv(rows));
   };
 
   return (
     <div>
-      {/* Page Header */}
-      <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
         <div>
-          <h2 className="text-xl font-medium">Time &amp; Billing</h2>
-          <p className="text-sm text-[var(--text-secondary)]">
-            Track billable hours, review unbilled balances per matter, and generate invoices.
-          </p>
+          <h2 className="text-xl font-medium mb-1">Time &amp; Billing</h2>
+          <p className="text-sm text-[var(--text-secondary)]">Log time, track unbilled balances, and generate matter invoices.</p>
         </div>
-        <button
-          onClick={() => setShowLog(true)}
-          className="h-9 px-4 flex items-center gap-1.5 text-sm font-medium bg-[var(--text-primary)] text-[var(--bg-primary)] rounded hover:opacity-90 transition-opacity shrink-0"
-        >
-          <Plus className="w-4 h-4" /> Log Time
-        </button>
+
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <button
+            onClick={handleExportCsv}
+            className="h-9 px-3 flex items-center gap-1.5 text-xs font-medium border border-[var(--border-subtle)] bg-[var(--bg-secondary)] hover:bg-[var(--bg-tertiary)] rounded-lg transition-colors"
+          >
+            <Download className="w-3.5 h-3.5" /> Export CSV
+          </button>
+          <button
+            onClick={() => setShowLog(true)}
+            className="h-9 px-4 flex items-center gap-1.5 text-sm font-medium bg-[var(--text-primary)] text-[var(--bg-primary)] rounded-lg hover:opacity-90 transition-opacity shadow-sm"
+          >
+            <Plus className="w-4 h-4" /> Log Time
+          </button>
+        </div>
       </div>
 
-      {/* Unbilled Alert Banner */}
       {unbilled.length > 0 && (
         <div className="mb-6 space-y-2">
-          {unbilled.slice(0, 3).map(u => (
-            <div
-              key={u.matter.id}
-              className="flex items-center justify-between gap-3 bg-[var(--bg-secondary)] border border-[var(--accent-primary)]/30 rounded-lg px-4 py-3 shadow-sm"
-            >
-              <button
-                onClick={() => {
-                  setMatterFilter(u.matter.id);
-                  setViewMode('grouped');
-                }}
-                className="text-left min-w-0 hover:opacity-80 transition-opacity"
-              >
-                <div className="flex items-center gap-1.5 text-sm font-medium text-[var(--text-primary)]">
-                  <Banknote className="w-4 h-4 text-[var(--accent-primary)] shrink-0" />
-                  <span className="truncate">{u.matter.title}</span>
-                </div>
-                <div className="text-xs text-[var(--text-secondary)] mt-0.5">
-                  {(u.minutes / 60).toFixed(1)} billable hours recorded, oldest entry {u.ageDays} day{u.ageDays === 1 ? '' : 's'} old — ready for invoicing.
-                </div>
-              </button>
+          {unbilled.map(u => (
+            <div key={u.matter.id} className="flex items-center justify-between bg-[var(--bg-secondary)] border border-[var(--signal-warning)]/30 rounded-lg p-3">
+              <div className="flex items-center gap-2 text-sm font-medium text-[var(--text-primary)]">
+                <AlertTriangle className="w-4 h-4 text-[var(--signal-warning)] shrink-0" />
+                <span>{u.matter.title}</span>
+                <span className="text-xs text-[var(--text-secondary)]">({formatHours(u.minutes)}h unbilled, oldest {u.ageDays}d old)</span>
+              </div>
               <button
                 onClick={() => handleGenerateInvoice(u.matter.id)}
                 disabled={invoicingMatterId === u.matter.id}
-                className="h-8 px-3 flex items-center gap-1.5 text-xs font-medium bg-[var(--text-primary)] text-[var(--bg-primary)] rounded hover:opacity-90 transition-opacity disabled:opacity-60 shrink-0"
+                className="h-8 px-3 flex items-center gap-1 text-xs font-medium bg-[var(--text-primary)] text-[var(--bg-primary)] rounded hover:opacity-90 transition-opacity disabled:opacity-40 shrink-0"
               >
                 <FileText className="w-3.5 h-3.5" />
-                <span>{invoicingMatterId === u.matter.id ? 'Generating…' : 'Generate invoice'}</span>
+                <span>{invoicingMatterId === u.matter.id ? 'Generating…' : 'Generate Invoice'}</span>
               </button>
             </div>
           ))}
         </div>
       )}
 
-      {/* Filters & View Mode Controls */}
-      <div className="flex flex-wrap items-end justify-between gap-3 mb-4">
-        <div className="flex flex-wrap items-end gap-3">
-          <div>
-            <label className="text-[10px] uppercase font-mono tracking-wider text-[var(--text-tertiary)] block mb-1">
-              Matter
-            </label>
-            <select
-              value={matterFilter}
-              onChange={e => setMatterFilter(e.target.value)}
-              className="h-9 px-3 bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded text-sm focus:outline-none w-56"
-            >
-              <option value="all">All matters</option>
-              {matters.map(m => (
-                <option key={m.id} value={m.id}>{m.title}</option>
-              ))}
-            </select>
+      {/* Summary Stats Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+        <div className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-xl p-4 shadow-sm">
+          <div className="text-xs font-mono uppercase tracking-wider text-[var(--text-tertiary)] mb-1">Total Logged Time</div>
+          <div className="text-xl font-bold text-[var(--text-primary)]">{formatHours(grandTotals.totalMins)} hrs</div>
+          <div className="text-xs text-[var(--text-tertiary)] mt-1">{filtered.length} total time entries</div>
+        </div>
+
+        <div className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-xl p-4 shadow-sm">
+          <div className="text-xs font-mono uppercase tracking-wider text-[var(--text-tertiary)] mb-1">Unbilled Time</div>
+          <div className="text-xl font-bold text-[var(--accent-primary)]">{formatHours(grandTotals.unbilledMins)} hrs</div>
+          <div className="text-xs text-[var(--text-tertiary)] mt-1">Ready for invoicing cycle</div>
+        </div>
+
+        <div className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-xl p-4 shadow-sm">
+          <div className="text-xs font-mono uppercase tracking-wider text-[var(--text-tertiary)] mb-1">Unbilled Revenue</div>
+          <div className="text-xl font-bold text-[var(--signal-positive)]">
+            {grandTotals.unbilledByCurrency.size > 0
+              ? Array.from(grandTotals.unbilledByCurrency.entries()).map(([c, a]) => formatAmount(a, c, locale)).join(' + ')
+              : '$0.00'}
           </div>
-          <div>
-            <label className="text-[10px] uppercase font-mono tracking-wider text-[var(--text-tertiary)] block mb-1">
-              From
-            </label>
+          <div className="text-xs text-[var(--text-tertiary)] mt-1">Pending client billing</div>
+        </div>
+      </div>
+
+      {/* Filter & View Controls */}
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-6 bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-xl p-3 shadow-sm">
+        <div className="flex flex-wrap items-center gap-2 flex-1 min-w-0">
+          <select
+            value={matterFilter}
+            onChange={e => setMatterFilter(e.target.value)}
+            className="h-9 px-3 bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded-lg text-xs font-medium focus:outline-none w-full sm:w-56"
+          >
+            <option value="all">All matters</option>
+            {matters.map(m => <option key={m.id} value={m.id}>{m.title}</option>)}
+          </select>
+
+          <div className="flex items-center gap-1">
             <input
               type="date"
               value={fromDate}
               onChange={e => setFromDate(e.target.value)}
-              className="h-9 px-3 bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded text-sm focus:outline-none"
+              className="h-9 px-2 bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded-lg text-xs font-mono focus:outline-none"
+              title="From date"
             />
-          </div>
-          <div>
-            <label className="text-[10px] uppercase font-mono tracking-wider text-[var(--text-tertiary)] block mb-1">
-              To
-            </label>
+            <span className="text-xs text-[var(--text-tertiary)]">to</span>
             <input
               type="date"
               value={toDate}
               onChange={e => setToDate(e.target.value)}
-              className="h-9 px-3 bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded text-sm focus:outline-none"
+              className="h-9 px-2 bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded-lg text-xs font-mono focus:outline-none"
+              title="To date"
             />
           </div>
-          <button
-            onClick={handleExport}
-            disabled={filtered.length === 0}
-            className="h-9 px-3 flex items-center gap-1.5 text-xs font-medium border border-[var(--border-subtle)] rounded hover:bg-[var(--bg-tertiary)] transition-colors disabled:opacity-40"
-          >
-            <Download className="w-3.5 h-3.5" /> Export CSV
-          </button>
+
+          {(matterFilter !== 'all' || fromDate || toDate) && (
+            <button
+              onClick={() => { setMatterFilter('all'); setFromDate(''); setToDate(''); }}
+              className="h-9 px-2.5 text-xs text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors"
+            >
+              Reset filters
+            </button>
+          )}
         </div>
 
-        {/* View Mode Toggle */}
         <div className="flex items-center bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] p-0.5 rounded-lg">
           <button
             onClick={() => setViewMode('grouped')}
@@ -416,7 +476,7 @@ export function TimeEntriesScreen() {
                 : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
             }`}
           >
-            <Layers className="w-3.5 h-3.5" /> Grouped by Matter
+            <Layers className="w-3.5 h-3.5" /> Group by Matter
           </button>
           <button
             onClick={() => setViewMode('flat')}
@@ -431,33 +491,28 @@ export function TimeEntriesScreen() {
         </div>
       </div>
 
-      {/* Totals Bar */}
-      <div className="flex flex-wrap items-center gap-4 mb-6 text-sm">
-        <span className="text-[var(--text-secondary)]">{formatHours(totals.totalMinutes)} hrs total</span>
-        <span className="text-[var(--text-secondary)]">·</span>
-        <span className="text-[var(--text-secondary)]">{formatHours(totals.billableMinutes)} hrs billable</span>
-        {Array.from(totals.billableByCurrency.entries()).map(([cur, amount]) => (
-          <span key={cur} className="contents">
-            <span className="text-[var(--text-secondary)]">·</span>
-            <span className="font-medium text-[var(--text-primary)]">{formatAmount(amount, cur, locale)} billable</span>
-          </span>
-        ))}
-      </div>
-
-      {/* Main Content Area */}
+      {/* Main Entries Section */}
       {filtered.length === 0 ? (
-        <div className="text-sm text-[var(--text-tertiary)] py-12 text-center border border-dashed border-[var(--border-subtle)] rounded-lg bg-[var(--bg-secondary)]">
-          No time entries match this filter.
+        <div className="text-center py-12 bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-xl">
+          <Clock className="w-8 h-8 text-[var(--text-tertiary)] mx-auto mb-3" />
+          <div className="text-sm font-medium mb-1">No time entries found</div>
+          <p className="text-xs text-[var(--text-tertiary)] max-w-sm mx-auto mb-4">
+            Try adjusting your filters or click below to log new billable time for your firm.
+          </p>
+          <button
+            onClick={() => setShowLog(true)}
+            className="h-8 px-3 text-xs font-medium bg-[var(--text-primary)] text-[var(--bg-primary)] rounded hover:opacity-90 transition-opacity"
+          >
+            Log Time
+          </button>
         </div>
       ) : viewMode === 'grouped' ? (
-        /* Grouped by Matter View */
         <div className="space-y-6">
-          {groupedByMatter.map(({ matter, entries }) => {
-            const mId = matter?.id;
+          {groupedByMatter.map(({ mId, matter, entries }) => {
             const pArea = matter ? practiceAreas.find(p => p.id === matter.practice_area_id) : null;
+            const groupTotalMinutes = entries.reduce((s, t) => s + (t.duration_minutes || 0), 0);
             const groupUnbilledEntries = entries.filter(t => !t.invoice_id && t.billable);
-            const groupUnbilledMinutes = groupUnbilledEntries.reduce((sum, t) => sum + t.duration_minutes, 0);
-            const groupTotalMinutes = entries.reduce((sum, t) => sum + t.duration_minutes, 0);
+            const groupUnbilledMinutes = groupUnbilledEntries.reduce((s, t) => s + (t.duration_minutes || 0), 0);
 
             const unbilledAmountsByCurrency = new Map<string, number>();
             for (const t of groupUnbilledEntries) {
@@ -470,7 +525,8 @@ export function TimeEntriesScreen() {
 
             const isUnbilledFlagged = matter ? unbilled.some(u => u.matter.id === matter.id) : false;
             const allInvoiced = entries.length > 0 && entries.every(t => !!t.invoice_id);
-            const hasGeneratedInvoices = matter ? invoices.some(i => i.matter_id === matter.id) : false;
+            const matterInvoicesList = matter ? invoices.filter(i => i.matter_id === matter.id).sort((a, b) => b.issued_date.localeCompare(a.issued_date)) : [];
+            const latestInvoice = matterInvoicesList[0] ?? null;
 
             return (
               <div key={mId || 'unlinked'} className="bg-[var(--bg-primary)] border border-[var(--border-subtle)] rounded-xl overflow-hidden shadow-sm">
@@ -479,34 +535,22 @@ export function TimeEntriesScreen() {
                   <div className="space-y-1 min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       {matter ? (
-                        <button
-                          onClick={() => setSelectedMatterForDetail(matter)}
-                          className="text-base font-semibold text-[var(--text-primary)] hover:text-[var(--accent-secondary)] transition-colors flex items-center gap-1.5 group text-left"
-                        >
-                          <span className="truncate">{matter.title}</span>
-                          <ExternalLink className="w-3.5 h-3.5 opacity-60 group-hover:opacity-100 transition-opacity text-[var(--accent-secondary)] shrink-0" />
-                        </button>
+                        <span className="text-base font-semibold text-[var(--text-primary)]">{matter.title}</span>
                       ) : (
                         <span className="text-base font-semibold text-[var(--text-primary)]">Unlinked / Standalone Entries</span>
                       )}
 
                       {isUnbilledFlagged ? (
-                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-[var(--signal-warning)]/15 text-[var(--signal-warning)] border border-[var(--signal-warning)]/30 shrink-0">
-                          <AlertTriangle className="w-3 h-3" /> Ready to Invoice
+                        <span className="text-[10px] uppercase tracking-wider font-semibold text-[var(--signal-warning)] bg-[var(--signal-warning)]/15 border border-[var(--signal-warning)]/30 px-2 py-0.5 rounded-full flex items-center gap-1">
+                          <AlertTriangle className="w-2.5 h-2.5" /> Ready to Invoice
                         </span>
                       ) : allInvoiced ? (
-                        <button
-                          onClick={() => matter && handleOpenLatestInvoiceForMatter(matter.id)}
-                          className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-[var(--signal-positive)]/15 text-[var(--signal-positive)] hover:bg-[var(--signal-positive)]/25 border border-[var(--signal-positive)]/30 transition-colors shrink-0 cursor-pointer"
-                          title="Click to view/download generated invoice PDF"
-                        >
-                          <CheckCircle2 className="w-3 h-3" />
-                          <span>All Invoiced</span>
-                          <FileText className="w-3 h-3 ml-0.5" />
-                        </button>
-                      ) : groupUnbilledEntries.length > 0 ? (
-                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-[var(--accent-primary)]/10 text-[var(--accent-primary)] border border-[var(--accent-primary)]/20 shrink-0">
-                          <Clock className="w-3 h-3" /> {formatHours(groupUnbilledMinutes)}h unbilled
+                        <span className="text-[10px] uppercase tracking-wider font-semibold text-[var(--signal-positive)] bg-[var(--signal-positive)]/15 border border-[var(--signal-positive)]/30 px-2 py-0.5 rounded-full flex items-center gap-1">
+                          <CheckCircle2 className="w-2.5 h-2.5" /> All Invoiced
+                        </span>
+                      ) : groupUnbilledMinutes > 0 ? (
+                        <span className="text-[10px] uppercase tracking-wider font-medium text-[var(--text-secondary)] bg-[var(--bg-secondary)] border border-[var(--border-subtle)] px-2 py-0.5 rounded-full flex items-center gap-1">
+                          <Clock className="w-2.5 h-2.5 text-[var(--accent-primary)]" /> {formatHours(groupUnbilledMinutes)}h unbilled
                         </span>
                       ) : null}
                     </div>
@@ -514,53 +558,73 @@ export function TimeEntriesScreen() {
                     <div className="text-xs text-[var(--text-tertiary)] flex flex-wrap items-center gap-2">
                       {pArea && <span>{pArea.label}</span>}
                       {pArea && <span>·</span>}
-                      <span>{entries.length} time {entries.length === 1 ? 'entry' : 'entries'} ({formatHours(groupTotalMinutes)}h total)</span>
-                      {groupUnbilledEntries.length > 0 && (
+                      <span>{entries.length} {entries.length === 1 ? 'entry' : 'entries'} ({formatHours(groupTotalMinutes)}h total)</span>
+                      {unbilledAmountsByCurrency.size > 0 && (
                         <>
                           <span>·</span>
                           <span className="font-medium text-[var(--text-secondary)]">
-                            {formatHours(groupUnbilledMinutes)}h unbilled
-                            {unbilledAmountsByCurrency.size > 0 && (
-                              <> ({Array.from(unbilledAmountsByCurrency.entries()).map(([c, a]) => formatAmount(a, c, locale)).join(' + ')})</>
-                            )}
+                            {Array.from(unbilledAmountsByCurrency.entries()).map(([c, a]) => formatAmount(a, c, locale)).join(' + ')} unbilled
                           </span>
                         </>
                       )}
                     </div>
                   </div>
 
-                  {/* Group Action Buttons */}
-                  <div className="flex items-center gap-2 shrink-0">
+                  {/* Group Action Buttons — Billing-First */}
+                  <div className="flex items-center gap-1.5 shrink-0">
                     {matter && groupUnbilledMinutes >= 120 && (
                       <button
                         onClick={() => handleGenerateInvoice(matter.id)}
                         disabled={invoicingMatterId === matter.id}
-                        className="h-8 px-3 flex items-center gap-1.5 text-xs font-medium bg-[var(--text-primary)] text-[var(--bg-primary)] hover:opacity-90 rounded transition-all shrink-0 shadow-sm"
+                        className="h-8 px-3 flex items-center gap-1.5 text-xs font-medium bg-[var(--text-primary)] text-[var(--bg-primary)] hover:opacity-90 rounded transition-all shrink-0 shadow-sm disabled:opacity-50"
                       >
                         <FileText className="w-3.5 h-3.5" />
                         <span>{invoicingMatterId === matter.id ? 'Generating…' : 'Generate Invoice'}</span>
                       </button>
                     )}
 
-                    {matter && hasGeneratedInvoices && (
-                      <button
-                        onClick={() => handleOpenLatestInvoiceForMatter(matter.id)}
-                        className="h-8 px-2.5 flex items-center gap-1 text-xs font-medium border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] rounded transition-colors shrink-0"
-                        title="View or download the generated invoice PDF"
-                      >
-                        <FileText className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
-                        <span>View Invoice</span>
-                      </button>
+                    {matter && latestInvoice && (
+                      <div className="flex items-center gap-1 shrink-0">
+                        {/* View PDF */}
+                        <button
+                          onClick={() => handleViewInvoice(latestInvoice)}
+                          className="h-8 px-2.5 flex items-center gap-1 text-xs font-medium border border-[var(--border-subtle)] bg-[var(--bg-secondary)] text-[var(--text-primary)] hover:bg-[var(--bg-elevated)] rounded transition-colors shrink-0"
+                          title="View invoice PDF in browser"
+                        >
+                          <Eye className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
+                          <span>View</span>
+                        </button>
+
+                        {/* Download PDF */}
+                        <button
+                          onClick={() => handleDownloadInvoice(latestInvoice)}
+                          className="h-8 px-2.5 flex items-center gap-1 text-xs font-medium border border-[var(--border-subtle)] bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-elevated)] rounded transition-colors shrink-0"
+                          title="Download raw PDF file to disk"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          <span>Download</span>
+                        </button>
+
+                        {/* Issue Invoice via Email */}
+                        <button
+                          onClick={() => handleIssueInvoice(latestInvoice)}
+                          disabled={issuingInvoiceId === latestInvoice.id}
+                          className="h-8 px-2.5 flex items-center gap-1 text-xs font-medium bg-[var(--accent-primary)]/10 text-[var(--accent-primary)] border border-[var(--accent-primary)]/20 hover:bg-[var(--accent-primary)]/20 rounded transition-colors shrink-0 disabled:opacity-50"
+                          title="Issue invoice by emailing to client"
+                        >
+                          <Send className="w-3.5 h-3.5" />
+                          <span>{issuingInvoiceId === latestInvoice.id ? 'Issuing…' : 'Issue'}</span>
+                        </button>
+                      </div>
                     )}
 
                     {matter && (
                       <button
                         onClick={() => setSelectedMatterForDetail(matter)}
-                        className="h-8 px-2.5 flex items-center gap-1 text-xs font-medium border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] rounded transition-colors shrink-0"
-                        title="Open matter details panel"
+                        className="p-1.5 text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] rounded transition-colors shrink-0 ml-1"
+                        title="View full matter details panel"
                       >
-                        <span>View Matter</span>
-                        <ExternalLink className="w-3 h-3" />
+                        <ExternalLink className="w-3.5 h-3.5" />
                       </button>
                     )}
                   </div>
@@ -574,10 +638,12 @@ export function TimeEntriesScreen() {
                       t={t}
                       locale={locale}
                       currency={currency}
-                      attorneyName={attorneyName}
+                      attorneyName={attorneyName(t.assigned_attorney_id)}
+                      matterTitle={matterTitle(t.matter_id)}
+                      showMatterTitle={false}
                       onEdit={() => setEditingEntry(t)}
                       onDelete={() => deleteTimeEntry(t.id)}
-                      onOpenInvoice={() => handleOpenInvoice(t.invoice_id)}
+                      onOpenInvoice={() => handleOpenInvoiceById(t.invoice_id)}
                     />
                   ))}
                 </div>
@@ -586,40 +652,38 @@ export function TimeEntriesScreen() {
           })}
         </div>
       ) : (
-        /* Flat Timeline View */
         <div className="space-y-2">
-          {filtered.map(t => {
-            const m = matters.find(x => x.id === t.matter_id);
-            return (
-              <TimeEntryRow
-                key={t.id}
-                t={t}
-                locale={locale}
-                currency={currency}
-                attorneyName={attorneyName}
-                matterTitle={matterTitle(t.matter_id)}
-                showMatterTitle={true}
-                onEdit={() => setEditingEntry(t)}
-                onDelete={() => deleteTimeEntry(t.id)}
-                onSelectMatter={m ? () => setSelectedMatterForDetail(m) : undefined}
-                onOpenInvoice={() => handleOpenInvoice(t.invoice_id)}
-              />
-            );
-          })}
+          {filtered.map(t => (
+            <TimeEntryRow
+              key={t.id}
+              t={t}
+              locale={locale}
+              currency={currency}
+              attorneyName={attorneyName(t.assigned_attorney_id)}
+              matterTitle={matterTitle(t.matter_id)}
+              showMatterTitle={true}
+              onEdit={() => setEditingEntry(t)}
+              onDelete={() => deleteTimeEntry(t.id)}
+              onSelectMatter={() => {
+                const m = matters.find(x => x.id === t.matter_id);
+                if (m) setSelectedMatterForDetail(m);
+              }}
+              onOpenInvoice={() => handleOpenInvoiceById(t.invoice_id)}
+            />
+          ))}
         </div>
       )}
 
-      {/* Modals */}
       {showLog && (
         <LogTimeModal
+          initialMatterId={matterFilter !== 'all' ? matterFilter : undefined}
           onClose={() => setShowLog(false)}
-          defaultMatterId={matterFilter !== 'all' ? matterFilter : undefined}
         />
       )}
 
       {editingEntry && (
         <LogTimeModal
-          entry={editingEntry}
+          entryToEdit={editingEntry}
           onClose={() => setEditingEntry(null)}
         />
       )}
