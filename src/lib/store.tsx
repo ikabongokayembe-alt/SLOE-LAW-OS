@@ -857,6 +857,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
     const clientName = state.parties.find(p => p.id === matter.client_party_id)?.name ?? 'Client';
     const firmName = state.firm?.name ?? 'Law Firm';
+    const firmRegion = state.firm?.region ?? null;
+    const firmCountry = state.firm?.country ?? null;
+    const firmPhone = state.firm?.phone_answering_number ?? null;
+    const lawpayUrl = state.firm?.lawpay_payment_page_url ?? null;
     const currency = state.firm?.currency ?? entries[0]?.currency ?? null;
     const locale = state.firm?.locale ?? 'en-US';
     const issuedDate = new Date().toISOString().slice(0, 10);
@@ -866,7 +870,18 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     const invoiceNumber = `INV-${issuedDate.replace(/-/g, '')}-${String(state.invoices.length + 1).padStart(4, '0')}`;
 
     const { blob, totalMinutes, totalAmount } = generateInvoicePdf({
-      invoiceNumber, issuedDate, firmName, clientName, matterTitle: matter.title, currency, locale,
+      invoiceNumber,
+      issuedDate,
+      dueDate: 'Due upon receipt',
+      firmName,
+      firmRegion,
+      firmCountry,
+      firmPhone,
+      lawpayUrl,
+      clientName,
+      matterTitle: matter.title,
+      currency,
+      locale,
       entries: entries.map(e => ({ id: e.id, date: e.date, description: e.description, duration_minutes: e.duration_minutes, rate: e.rate })),
     });
 

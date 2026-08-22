@@ -23,7 +23,12 @@ export interface InvoiceLineEntry {
 export interface InvoicePdfInput {
   invoiceNumber: string;
   issuedDate: string; // date-only
+  dueDate?: string;   // e.g. "Due upon receipt"
   firmName: string;
+  firmRegion?: string | null;
+  firmCountry?: string | null;
+  firmPhone?: string | null;
+  lawpayUrl?: string | null;
   clientName: string;
   matterTitle: string;
   currency: string | null;
@@ -34,15 +39,25 @@ export interface InvoicePdfInput {
 export interface InvoicePdfResult {
   blob: Blob;
   totalMinutes: number;
-  // Null only when NOT ONE covered entry had a rate set — never a
-  // fabricated stand-in number. Otherwise the sum of just the rated
-  // entries (see the "not included" footnote logic below) — a partial,
-  // honestly-labelled total beats a wrong complete-looking one.
   totalAmount: number | null;
 }
 
 export function generateInvoicePdf(input: InvoicePdfInput): InvoicePdfResult {
-  const { invoiceNumber, issuedDate, firmName, clientName, matterTitle, currency, locale, entries } = input;
+  const {
+    invoiceNumber,
+    issuedDate,
+    dueDate = 'Due upon receipt',
+    firmName,
+    firmRegion,
+    firmCountry,
+    firmPhone,
+    lawpayUrl,
+    clientName,
+    matterTitle,
+    currency,
+    locale,
+    entries,
+  } = input;
 
   const totalMinutes = entries.reduce((sum, e) => sum + e.duration_minutes, 0);
   const ratedEntries = entries.filter(e => e.rate !== null && e.rate !== undefined);
@@ -55,26 +70,60 @@ export function generateInvoicePdf(input: InvoicePdfInput): InvoicePdfResult {
   const pageWidth = doc.internal.pageSize.getWidth();
   const marginX = 40;
 
+  // Header Title on Left
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(20);
-  doc.text('INVOICE', marginX, 56);
+  doc.setTextColor(20, 26, 38);
+  doc.text('INVOICE', marginX, 50);
+
+  // Right-aligned Header Info
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.setTextColor(20, 26, 38);
+
+  let rightY = 36;
+  doc.text(firmName, pageWidth - marginX, rightY, { align: 'right' });
 
   doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.setTextColor(80, 80, 80);
+
+  const locationStr = [firmRegion, firmCountry].filter(Boolean).join(', ');
+  if (locationStr) {
+    rightY += 13;
+    doc.text(locationStr, pageWidth - marginX, rightY, { align: 'right' });
+  }
+
+  if (firmPhone) {
+    rightY += 13;
+    doc.text(`Tel: ${firmPhone}`, pageWidth - marginX, rightY, { align: 'right' });
+  }
+
+  rightY += 15;
+  doc.text(`Invoice #${invoiceNumber}`, pageWidth - marginX, rightY, { align: 'right' });
+  rightY += 13;
+  doc.text(`Issued: ${formatDateOnly(issuedDate, locale, { day: 'numeric', month: 'short', year: 'numeric' })}`, pageWidth - marginX, rightY, { align: 'right' });
+  rightY += 13;
+  doc.text(`Due Date: ${dueDate}`, pageWidth - marginX, rightY, { align: 'right' });
+
+  // Bill To & Matter on Left
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.setTextColor(20, 26, 38);
+  doc.text('BILL TO', marginX, 90);
+  doc.setFont('helvetica', 'normal');
   doc.setFontSize(10);
-  doc.text(firmName, pageWidth - marginX, 40, { align: 'right' });
-  doc.text(`Invoice #${invoiceNumber}`, pageWidth - marginX, 54, { align: 'right' });
-  doc.text(`Issued ${formatDateOnly(issuedDate, locale, { day: 'numeric', month: 'short', year: 'numeric' })}`, pageWidth - marginX, 68, { align: 'right' });
+  doc.setTextColor(40, 40, 40);
+  doc.text(clientName, marginX, 104);
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9);
-  doc.text('BILL TO', marginX, 92);
+  doc.setTextColor(20, 26, 38);
+  doc.text('MATTER', marginX, 126);
   doc.setFont('helvetica', 'normal');
-  doc.text(clientName, marginX, 106);
-
-  doc.setFont('helvetica', 'bold');
-  doc.text('MATTER', marginX, 128);
-  doc.setFont('helvetica', 'normal');
-  doc.text(matterTitle, marginX, 142);
+  doc.setFontSize(10);
+  doc.setTextColor(40, 40, 40);
+  doc.text(matterTitle, marginX, 140);
 
   const rows = entries.map(e => {
     const amount = computeAmount(e.duration_minutes, e.rate);
@@ -88,7 +137,7 @@ export function generateInvoicePdf(input: InvoicePdfInput): InvoicePdfResult {
   });
 
   autoTable(doc, {
-    startY: 164,
+    startY: 160,
     head: [['Date', 'Description', 'Hours', 'Rate', 'Amount']],
     body: rows,
     margin: { left: marginX, right: marginX },
@@ -101,26 +150,53 @@ export function generateInvoicePdf(input: InvoicePdfInput): InvoicePdfResult {
     },
   });
 
-  // jspdf-autotable stamps the table's final Y position onto the doc
-  // instance for whatever renders after it -- reading it back here is the
-  // documented way to continue laying out content below a table of
-  // unknown height, rather than guessing a fixed offset.
-  const finalY = (doc as any).lastAutoTable?.finalY ?? 164;
+  const finalY = (doc as any).lastAutoTable?.finalY ?? 160;
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(10);
-  doc.text(`Total hours: ${formatHours(totalMinutes)}`, pageWidth - marginX, finalY + 24, { align: 'right' });
+  doc.setTextColor(20, 26, 38);
+  doc.text(`Total hours: ${formatHours(totalMinutes)}`, pageWidth - marginX, finalY + 22, { align: 'right' });
   doc.text(
     totalAmount !== null ? `Total due: ${formatAmount(totalAmount, currency, locale)}` : 'Total due: — (no rate set on any entry)',
-    pageWidth - marginX, finalY + 40, { align: 'right' }
+    pageWidth - marginX, finalY + 38, { align: 'right' }
   );
+
+  let currentY = finalY + 54;
 
   if (unratedCount > 0 && totalAmount !== null) {
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(8);
+    doc.setTextColor(100, 100, 100);
     doc.text(
       `* Total reflects only entries with a billing rate set. ${unratedCount} entr${unratedCount === 1 ? 'y has' : 'ies have'} no rate and ${unratedCount === 1 ? 'is' : 'are'} not included above.`,
-      marginX, finalY + 60
+      marginX, currentY
+    );
+    currentY += 20;
+  }
+
+  // Payment Instructions Section
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.setTextColor(20, 26, 38);
+  doc.text('PAYMENT INSTRUCTIONS', marginX, currentY);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.setTextColor(60, 60, 60);
+
+  if (lawpayUrl && lawpayUrl.trim().length > 0) {
+    doc.text(
+      `Pay online via LawPay: ${lawpayUrl.trim()}`,
+      marginX,
+      currentY + 14,
+      { maxWidth: pageWidth - marginX * 2 }
+    );
+  } else {
+    doc.text(
+      'Please contact the firm directly to arrange payment.',
+      marginX,
+      currentY + 14,
+      { maxWidth: pageWidth - marginX * 2 }
     );
   }
 
